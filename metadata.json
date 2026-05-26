@@ -1,0 +1,6 @@
+{
+  "name": "ZapFunil CRM",
+  "description": "CRM e Funil de Vendas integrado ao WhatsApp (WAHA) com IA para transcrições e automações.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

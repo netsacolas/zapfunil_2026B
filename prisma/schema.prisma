@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  roleId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  role      Role       @relation(fields: [roleId], references: [id])
+  sessions  Session[]
+  tasks     Task[]
+  notes     Note[]
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique // ADMIN, SUPERVISOR, ATTENDANT
+  permissions Json?
+  users       User[]
+}
+
+model Session {
+  id              String   @id @default(uuid())
+  name            String
+  phoneNumber     String?
+  status          String   @default("OFFLINE") // ONLINE, OFFLINE, CONNECTING, QR_PENDING
+  wahaSessionName String   @unique
+  userId          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id])
+  conversations Conversation[]
+}
+
+model Contact {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String   @unique
+  company   String?
+  email     String?
+  city      String?
+  state     String?
+  notes     String?
+  origin    String?
+  status    String   @default("LEAD")
+  customFields Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversations Conversation[]
+  contactTags   ContactTag[]
+  funnelStageId String?
+  funnelStage   FunnelStage?   @relation(fields: [funnelStageId], references: [id])
+  tasks         Task[]
+  contactNotes  Note[]
+}
+
+model Conversation {
+  id           String   @id @default(uuid())
+  contactId    String
+  sessionId    String
+  unreadCount  Int      @default(0)
+  lastMessage  String?
+  lastActivity DateTime @default(now())
+  createdAt    DateTime @default(now())
+  
+  contact      Contact   @relation(fields: [contactId], references: [id])
+  session      Session   @relation(fields: [sessionId], references: [id])
+  messages     Message[]
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  type           String   @default("TEXT") // TEXT, IMAGE, VIDEO, AUDIO, DOCUMENT
+  content        String?
+  hasMedia       Boolean  @default(false)
+  mediaUrl       String?
+  isFromMe       Boolean  @default(false)
+  timestamp      DateTime @default(now())
+  status         String   @default("SENT") // SENT, DELIVERED, READ
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  transcription  AudioTranscription?
+}
+
+model CustomField {
+  id        String   @id @default(uuid())
+  name      String
+  type      String   // text, number, select, date
+  options   Json?    // Array of strings if type is 'select'
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Funnel {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  stages    FunnelStage[]
+}
+
+model FunnelStage {
+  id        String   @id @default(uuid())
+  funnelId  String
+  name      String
+  order     Int
+
+  funnel    Funnel    @relation(fields: [funnelId], references: [id])
+  contacts  Contact[]
+}
+
+model Tag {
+  id    String @id @default(uuid())
+  name  String @unique
+  color String
+
+  contacts ContactTag[]
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+
+  contact Contact @relation(fields: [contactId], references: [id])
+  tag     Tag     @relation(fields: [tagId], references: [id])
+
+  @@id([contactId, tagId])
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  dueDate     DateTime?
+  status      String   @default("PENDING")
+  userId      String
+  contactId   String?
+
+  user        User     @relation(fields: [userId], references: [id])
+  contact     Contact? @relation(fields: [contactId], references: [id])
+}
+
+model Note {
+  id        String   @id @default(uuid())
+  content   String
+  userId    String
+  contactId String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+  contact   Contact  @relation(fields: [contactId], references: [id])
+}
+
+model AudioTranscription {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  text      String
+  createdAt DateTime @default(now())
+
+  message   Message  @relation(fields: [messageId], references: [id])
+}
