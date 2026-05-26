@@ -29,6 +29,7 @@ export interface Message {
   isFromMe: boolean;
   type: 'TEXT' | 'AUDIO' | 'IMAGE';
   audioTranscription?: string;
+  mediaUrl?: string;
 }
 
 export interface Conversation {

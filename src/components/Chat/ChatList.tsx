@@ -273,10 +273,16 @@ export default function ChatList() {
                   </div>
                   <div className="flex justify-between items-center gap-2">
                     <p className={cn(
-                      "text-xs truncate",
+                      "text-xs truncate flex items-center gap-1",
                       isActive ? "font-medium text-stone-800" : "text-stone-500"
                     )}>
-                      {lastMsg?.type === 'AUDIO' ? '🎵 Áudio' : lastMsg?.content}
+                      {lastMsg?.type === 'AUDIO' ? (
+                        <><span>🎵</span> Áudio</>
+                      ) : lastMsg?.type === 'IMAGE' ? (
+                        <><span>📷</span> {lastMsg?.content && lastMsg?.content !== '📷 Imagem' ? lastMsg.content : 'Imagem'}</>
+                      ) : (
+                        lastMsg?.content
+                      )}
                     </p>
                     {conv.unreadCount > 0 && (
                       <span className="w-5 h-5 rounded-full bg-orange-500 flex items-center justify-center text-[10px] text-white flex-shrink-0">

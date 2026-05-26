@@ -40,8 +40,9 @@ async function startServer() {
 
   // Proxy endpoint to bypass browser CORS when connecting to WAHA
   app.all("/api/waha-proxy/*", async (req, res) => {
-    const wahaUrl = req.headers["x-waha-url"] as string;
+    let wahaUrl = (req.headers["x-waha-url"] || req.query.wahaUrl) as string;
     const authHeader = req.headers["authorization"];
+    let apiKeyHeader = (req.headers["x-api-key"] || req.query.apiKey) as string;
     
     if (!wahaUrl) {
       return res.status(400).json({ error: "Missing x-waha-url header" });
@@ -49,8 +50,13 @@ async function startServer() {
 
     // Extract target path from the request path (remove /api/waha-proxy prefix)
     const targetPath = req.path.replace(/^\/api\/waha-proxy/, "");
-    // Maintain query parameters if any (like ?t=timestamp)
-    const queryString = req.url.includes("?") ? req.url.substring(req.url.indexOf("?")) : "";
+    
+    // Filter out wahaUrl and apiKey from query params before forwarding
+    const query = { ...req.query };
+    delete query.wahaUrl;
+    delete query.apiKey;
+    const searchParams = new URLSearchParams(query as any).toString();
+    const queryString = searchParams ? `?${searchParams}` : "";
     const targetUrl = `${wahaUrl.replace(/\/$/, "")}${targetPath}${queryString}`;
 
     try {
@@ -58,9 +64,8 @@ async function startServer() {
       if (authHeader) {
         headers["Authorization"] = authHeader;
       }
-      const apiKeyHeader = req.headers["x-api-key"];
       if (apiKeyHeader) {
-        headers["X-Api-Key"] = apiKeyHeader as string;
+        headers["X-Api-Key"] = apiKeyHeader;
       }
       if (req.headers["content-type"]) {
         headers["Content-Type"] = req.headers["content-type"];

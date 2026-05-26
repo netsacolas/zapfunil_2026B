@@ -74,6 +74,7 @@ export default function ChatHistory() {
   const [scheduleType, setScheduleType] = useState<'TEXT' | 'IMAGE' | 'VIDEO' | 'PDF' | 'AUDIO' | 'POLL' | 'CHOICE'>('TEXT');
   const [scheduleMediaUrl, setScheduleMediaUrl] = useState('');
   const [scheduleRecurrence, setScheduleRecurrence] = useState<'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'>('NONE');
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const conversation = conversations.find(c => c.id === activeConversationId);
@@ -166,16 +167,24 @@ export default function ChatHistory() {
       <div className="flex-1 p-6 space-y-4 flex flex-col overflow-y-auto">
         <div className="self-center py-1 px-3 bg-white/70 rounded-lg text-[11px] text-stone-500 uppercase tracking-widest shadow-sm">Hoje</div>
         {messages.map((msg, idx) => {
+          const isImage = msg.type === 'IMAGE';
+          const imageUrl = msg.mediaUrl || msg.content;
+          const hasCaption = msg.content && msg.content !== imageUrl;
+
           return (
-            <div key={msg.id} className={cn("max-w-md shadow-sm border p-3 text-stone-900", msg.isFromMe ? "self-end bg-[#F4F2EC] border-stone-200 rounded-tl-xl rounded-b-xl" : "self-start bg-white border-stone-200 rounded-tr-xl rounded-b-xl")}>
+            <div key={msg.id} className={cn(
+              "relative max-w-[85%] sm:max-w-md shadow-sm border text-stone-900", 
+              isImage ? "p-1" : "p-3",
+              msg.isFromMe ? "self-end bg-[#d9fdd3] border-[#d9fdd3] rounded-tl-xl rounded-b-xl" : "self-start bg-white border-white rounded-tr-xl rounded-b-xl"
+            )}>
               {msg.type === 'AUDIO' ? (
                 <div className="flex flex-col w-[260px]">
                   <div className="flex items-center space-x-2 p-2 rounded border bg-white border-stone-100 shadow-sm">
-                    <button className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white flex-shrink-0", msg.isFromMe ? "bg-stone-800" : "bg-orange-500")}>
+                    <button className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white flex-shrink-0", msg.isFromMe ? "bg-[#00A884]" : "bg-orange-500")}>
                       <Mic size={16}/>
                     </button>
                     <div className="flex-1 h-1 rounded-full relative overflow-hidden bg-stone-200">
-                      <div className={cn("absolute left-0 top-0 h-full w-1/3", msg.isFromMe ? "bg-stone-800" : "bg-orange-500")}></div>
+                      <div className={cn("absolute left-0 top-0 h-full w-1/3", msg.isFromMe ? "bg-[#00A884]" : "bg-orange-500")}></div>
                     </div>
                     <span className="text-[10px] text-stone-500">0:14</span>
                   </div>
@@ -189,17 +198,52 @@ export default function ChatHistory() {
                     </div>
                   )}
                 </div>
+              ) : isImage ? (
+                <div className="flex flex-col relative group">
+                  <img 
+                    src={imageUrl} 
+                    alt="Imagem da conversa" 
+                    className="max-w-full sm:max-w-[320px] rounded-lg cursor-pointer object-cover shadow-sm"
+                    style={{ maxHeight: '320px' }}
+                    onClick={() => setSelectedImage(imageUrl)}
+                  />
+                  {hasCaption && (
+                    <p className="text-sm mt-1 px-1 pb-3">{msg.content}</p>
+                  )}
+                </div>
               ) : (
                 <p className="text-sm">{msg.content}</p>
               )}
-              <p className="text-[10px] text-stone-400 text-right mt-1">
-                {format(new Date(msg.timestamp), 'HH:mm')} {msg.isFromMe && '✓✓'}
-              </p>
+              
+              <div className={cn(
+                "text-[10.5px] font-medium flex items-center gap-1", 
+                isImage && !hasCaption ? "absolute bottom-2 right-2 text-white bg-black/40 px-1.5 py-0.5 rounded-full backdrop-blur-sm z-10" : "justify-end mt-0.5 pr-1 text-stone-500"
+              )}>
+                {format(new Date(msg.timestamp), 'HH:mm')} 
+                {msg.isFromMe && <span className={isImage && !hasCaption ? "text-white" : "text-blue-500"}>✓✓</span>}
+              </div>
             </div>
           );
         })}
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Image Viewer Modal */}
+      {selectedImage && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+          <button 
+            onClick={() => setSelectedImage(null)}
+            className="absolute top-4 right-4 text-white/70 hover:text-white bg-black/50 p-2 rounded-full transition-colors"
+          >
+            <X size={24} />
+          </button>
+          <img 
+            src={selectedImage} 
+            alt="Imagem ampliada" 
+            className="max-w-full max-h-[90vh] object-contain rounded-md"
+          />
+        </div>
+      )}
 
       {/* Input Area */}
       <footer className="bg-white p-4 flex items-center space-x-3 shrink-0">

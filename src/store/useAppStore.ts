@@ -194,20 +194,39 @@ const getWahaSessionName = (user: any) => {
   return `${name}-${user.id}`;
 };
 
-const wahaMsgToMessage = (msg: any): Message => {
+const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string): Message => {
   let msgType: Message['type'] = 'TEXT';
   let content = msg.body || '';
+  let mediaUrl: string | undefined = undefined;
   
   if (msg.hasMedia) {
     const mime = msg.media?.mimetype || '';
+    if (msg.media?.url && wahaUrl) {
+      try {
+        const urlString = msg.media.url;
+        const wahaUrlParam = `wahaUrl=${encodeURIComponent(wahaUrl)}`;
+        const apiKeyParam = apiKey ? `&apiKey=${encodeURIComponent(apiKey)}` : '';
+        
+        if (urlString.startsWith('http')) {
+          const urlObj = new URL(urlString);
+          mediaUrl = `/api/waha-proxy${urlObj.pathname}?${wahaUrlParam}${apiKeyParam}`;
+        } else {
+          const cleanPath = urlString.startsWith('/') ? urlString : `/${urlString}`;
+          mediaUrl = `/api/waha-proxy${cleanPath}?${wahaUrlParam}${apiKeyParam}`;
+        }
+      } catch (e) {
+        console.error("Failed to parse media URL:", e);
+      }
+    }
+
     if (mime.startsWith('audio')) {
       msgType = 'AUDIO';
-      content = '🎵 Áudio';
+      content = msg.body || '🎵 Áudio';
     } else if (mime.startsWith('image')) {
       msgType = 'IMAGE';
-      content = '📷 Imagem';
+      content = msg.body || '📷 Imagem';
     } else {
-      content = '📁 Arquivo';
+      content = msg.body || '📁 Arquivo';
     }
   }
   
@@ -216,7 +235,8 @@ const wahaMsgToMessage = (msg: any): Message => {
     content: content,
     timestamp: new Date(msg.timestamp * 1000).toISOString(),
     isFromMe: msg.fromMe,
-    type: msgType
+    type: msgType,
+    mediaUrl: mediaUrl
   };
 };
 
@@ -435,7 +455,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         fetch(`/api/waha-proxy/api/${sessionName}/chats`, {
           headers: getWahaHeaders(get)
         }),
-        fetch(`/api/waha-proxy/api/${sessionName}/chats/all/messages?limit=50`, {
+        fetch(`/api/waha-proxy/api/${sessionName}/chats/all/messages?limit=50&downloadMedia=true`, {
           headers: getWahaHeaders(get)
         })
       ]);
@@ -480,7 +500,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           // Find messages for this chat in the global list, convert them
           const wahaMsgs = msgsByChat[chatId] || [];
-          const newMessages = wahaMsgs.map(wahaMsgToMessage);
+          const newMessages = wahaMsgs.map(msg => wahaMsgToMessage(msg, get().wahaUrl, get().wahaApiKey));
           
           // Preserve existing loaded messages for this chat to avoid dropping history
           const existingConv = get().conversations.find(c => c.id === chatId);
@@ -613,7 +633,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingChatId: chatId });
 
     try {
-      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30`, {
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30&downloadMedia=true`, {
         headers: getWahaHeaders(get),
         signal: controller.signal
       });
@@ -621,7 +641,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       
       const wahaMsgs = await res.json();
       const messages = wahaMsgs
-        .map(wahaMsgToMessage)
+        .map(msg => wahaMsgToMessage(msg, get().wahaUrl, get().wahaApiKey))
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
       // Update messages in the specific conversation in state
