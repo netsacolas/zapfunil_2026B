@@ -311,18 +311,30 @@ export default function LoginView() {
                 </div>
               </div>
 
-              <div className="mt-6 grid grid-cols-2 gap-3">
+              <div className="mt-6 grid grid-cols-3 gap-2">
                 <button
                   onClick={handleFillDemoAdmin}
-                  className="w-full inline-flex justify-center py-2 px-4 border border-stone-300 rounded-lg shadow-sm bg-white text-xs font-bold text-stone-700 hover:bg-stone-50 transition cursor-pointer"
+                  type="button"
+                  className="w-full inline-flex justify-center py-2 px-1 border border-stone-300 rounded-lg shadow-sm bg-white text-[10px] font-bold text-stone-700 hover:bg-stone-50 transition cursor-pointer"
                 >
-                  Preencher Admin
+                  Demo Admin
                 </button>
                 <button
                   onClick={handleFillDemoAttendant}
-                  className="w-full inline-flex justify-center py-2 px-4 border border-stone-300 rounded-lg shadow-sm bg-white text-xs font-bold text-stone-700 hover:bg-stone-50 transition cursor-pointer"
+                  type="button"
+                  className="w-full inline-flex justify-center py-2 px-1 border border-stone-300 rounded-lg shadow-sm bg-white text-[10px] font-bold text-stone-700 hover:bg-stone-50 transition cursor-pointer"
                 >
-                  Preencher Atendente
+                  Demo Atendente
+                </button>
+                <button
+                  onClick={() => {
+                    setEmail('mariocromia@gmail.com');
+                    setPassword('33822912');
+                  }}
+                  type="button"
+                  className="w-full inline-flex justify-center py-2 px-1 border border-orange-300 rounded-lg shadow-sm bg-orange-50 text-[10px] font-bold text-orange-700 hover:bg-orange-100 transition cursor-pointer"
+                >
+                  Mário Alex (ZAP)
                 </button>
               </div>
             </div>

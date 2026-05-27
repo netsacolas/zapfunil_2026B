@@ -392,7 +392,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   conversations: (() => {
     try {
       const cached = localStorage.getItem('zapfunil_conversations_cache');
-      return cached ? JSON.parse(cached) : mockConversations;
+      const parsed = cached ? JSON.parse(cached) : null;
+      return parsed && parsed.length > 0 ? parsed : mockConversations;
     } catch (e) {
       return mockConversations;
     }
@@ -544,7 +545,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           let messages: Message[] = [];
           let lastMsg: Message | null = null;
           if (c.lastMessage) {
-            const msgText = c.lastMessage.text || '';
+            const msgText = c.lastMessage.text || c.lastMessage.body || '';
             let msgType: Message['type'] = 'TEXT';
             if (msgText.startsWith('📷') || msgText.includes('Imagem') || msgText.toLowerCase().includes('photo')) {
               msgType = 'IMAGE';
@@ -552,11 +553,15 @@ export const useAppStore = create<AppState>((set, get) => ({
               msgType = 'AUDIO';
             }
 
+            const timestamp = c.lastMessage.timestamp
+              ? new Date(c.lastMessage.timestamp * 1000).toISOString()
+              : new Date().toISOString();
+
             lastMsg = {
-              id: c.lastMessage.id,
+              id: c.lastMessage.id || Math.random().toString(36).substring(7),
               content: msgText,
-              timestamp: new Date(c.lastMessage.timestamp * 1000).toISOString(),
-              isFromMe: c.lastMessage.fromMe,
+              timestamp: timestamp,
+              isFromMe: !!c.lastMessage.fromMe,
               type: msgType
             };
           }

@@ -91,7 +91,7 @@ async function startServer() {
       } else {
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
-        const finalContentType = req.query.mimeType || contentType;
+        const finalContentType = (req.query.mimeType as string) || contentType;
         res.setHeader("Content-Type", finalContentType);
         return res.send(buffer);
       }
