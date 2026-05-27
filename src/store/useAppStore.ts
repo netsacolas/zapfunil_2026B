@@ -26,10 +26,15 @@ interface AppState {
   fetchProfilePicture: (chatId: string) => Promise<void>;
   contactsMap: Record<string, string>;
   isContactsLoaded: boolean;
+  isSyncingContacts: boolean;
   loadContacts: () => Promise<void>;
+  syncContacts: () => Promise<void>;
   isLoadingChats: boolean;
+  isLoadingMoreChats: boolean;
+  hasMoreChats: boolean;
   isChatsInitialLoaded: boolean;
   loadingChatId: string | null;
+  loadMoreChats: () => Promise<void>;
   profilePicsQueue: string[];
   isProcessingQueue: boolean;
   processProfilePicsQueue: () => Promise<void>;
@@ -383,6 +388,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       wahaQrCode: null,
       contactsMap: {},
       isContactsLoaded: false,
+      isSyncingContacts: false,
       profilePictures: {},
       profilePicsQueue: [],
       isProcessingQueue: false
@@ -417,7 +423,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       return false;
     }
   })(),
+  isSyncingContacts: false,
   isLoadingChats: false,
+  isLoadingMoreChats: false,
+  hasMoreChats: true,
   isChatsInitialLoaded: false,
   loadingChatId: null,
   profilePicsQueue: [],
@@ -608,14 +617,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ profilePictures });
       }
 
-      // Sort: most recent activity at the top
-      mappedConversations.sort((a, b) => {
-        const timeA = a.lastActivity || 0;
-        const timeB = b.lastActivity || 0;
-        return timeB - timeA;
+      set({ 
+        conversations: mappedConversations,
+        hasMoreChats: overviewData.length === 40
       });
-
-      set({ conversations: mappedConversations });
 
       // Pre-fetch messages for top 5 chats in background (lazy load)
       const topChats = mappedConversations.slice(0, 5);
@@ -625,9 +630,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
-      // Non-blocking trigger: load contacts in background
-      if (!get().isContactsLoaded) {
-        get().loadContacts();
+      // Non-blocking trigger: load contacts in background after 15 seconds to avoid initial overload
+      if (!get().isContactsLoaded && !get().isSyncingContacts) {
+        setTimeout(() => {
+          if (!get().isContactsLoaded && !get().isSyncingContacts && get().wahaSessionStatus === 'CONNECTED') {
+            get().loadContacts();
+          }
+        }, 15000);
       }
     } catch (err) {
       console.error("Failed to load WAHA chats overview:", err);
@@ -635,10 +644,142 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ isLoadingChats: false, isChatsInitialLoaded: true });
     }
   },
-  loadContacts: async () => {
+  loadMoreChats: async () => {
+    if (get().isLoadingMoreChats || !get().hasMoreChats) return;
     const user = get().user;
     if (!user) return;
     const sessionName = getWahaSessionName(user);
+
+    set({ isLoadingMoreChats: true });
+
+    try {
+      const currentCount = get().conversations.length;
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/overview?limit=25&offset=${currentCount}`, {
+        headers: getWahaHeaders(get)
+      });
+
+      if (!res.ok) throw new Error("Failed to fetch more chats overview");
+      const overviewData = await res.json();
+
+      if (overviewData.length === 0) {
+        set({ hasMoreChats: false });
+        return;
+      }
+
+      const contactsMap = get().contactsMap;
+      const profilePictures = { ...get().profilePictures };
+      let profilePicsUpdated = false;
+
+      const newConversations: Conversation[] = overviewData
+        .filter((c: any) => c.id && c.id !== 'status@broadcast')
+        .map((c: any) => {
+          const chatId = c.id;
+          const phone = chatId.split('@')[0];
+
+          // Extract profile picture if available in overview DTO
+          if (c.picture && c.picture !== 'FAILED' && !profilePictures[chatId]) {
+            profilePictures[chatId] = c.picture;
+            profilePicsUpdated = true;
+          }
+
+          // Resolve contact name from overview or cache
+          let name = c.name;
+          if (!name) {
+            name = contactsMap[chatId] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || phone;
+          }
+          if (name && name.startsWith('*\n')) {
+            name = name.replace('*\n', '');
+          }
+
+          // Process last message if it exists
+          let messages: Message[] = [];
+          let lastMsg: Message | null = null;
+          if (c.lastMessage) {
+            const msgText = c.lastMessage.text || c.lastMessage.body || '';
+            let msgType: Message['type'] = 'TEXT';
+            if (msgText.startsWith('📷') || msgText.includes('Imagem') || msgText.toLowerCase().includes('photo')) {
+              msgType = 'IMAGE';
+            } else if (msgText.startsWith('🎵') || msgText.includes('Áudio') || msgText.toLowerCase().includes('voice') || msgText.toLowerCase().includes('audio') || msgText.toLowerCase().includes('ptt')) {
+              msgType = 'AUDIO';
+            }
+
+            const timestamp = c.lastMessage.timestamp
+              ? new Date(c.lastMessage.timestamp * 1000).toISOString()
+              : new Date().toISOString();
+
+            lastMsg = {
+              id: c.lastMessage.id || Math.random().toString(36).substring(7),
+              content: msgText,
+              timestamp: timestamp,
+              isFromMe: !!c.lastMessage.fromMe,
+              type: msgType
+            };
+            messages = [lastMsg];
+          }
+
+          const lastActivity = lastMsg
+            ? new Date(lastMsg.timestamp).getTime()
+            : (c.conversationTimestamp ? c.conversationTimestamp * 1000 : 0);
+
+          const isArchived = c.archive || c.archived || c._chat?.archive || c._chat?.archived || false;
+
+          return {
+            id: chatId,
+            contact: {
+              id: chatId,
+              name: name,
+              phone: phone,
+              status: 'Lead',
+            },
+            unreadCount: c._chat?.unreadCount || c.unreadCount || c._chat?.unreadMentionCount || 0,
+            messages: messages,
+            lastActivity: lastActivity,
+            isArchived: isArchived,
+            hasLoadedHistory: false
+          };
+        });
+
+      if (profilePicsUpdated) {
+        set({ profilePictures });
+      }
+
+      // Merge new conversations with existing ones (avoiding duplicates)
+      set((state) => {
+        const mergedMap = new Map<string, Conversation>();
+        state.conversations.forEach(c => mergedMap.set(c.id, c));
+        newConversations.forEach(c => {
+          if (!mergedMap.has(c.id)) {
+            mergedMap.set(c.id, c);
+          }
+        });
+
+        const mergedList = Array.from(mergedMap.values());
+        
+        // Sort: most recent activity at the top
+        mergedList.sort((a, b) => {
+          const timeA = a.lastActivity || 0;
+          const timeB = b.lastActivity || 0;
+          return timeB - timeA;
+        });
+
+        return {
+          conversations: mergedList,
+          hasMoreChats: overviewData.length === 25
+        };
+      });
+    } catch (err) {
+      console.error("Failed to load more chats:", err);
+    } finally {
+      set({ isLoadingMoreChats: false });
+    }
+  },
+  loadContacts: async () => {
+    if (get().isSyncingContacts) return;
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    set({ isSyncingContacts: true });
 
     try {
       const contactsRes = await fetch(`/api/waha-proxy/api/contacts/all?session=${sessionName}`, {
@@ -646,36 +787,62 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       if (contactsRes.ok) {
         const contactsData = await contactsRes.json();
+        
+        // Chunk processing to avoid blocking UI main thread
         const contactsMap: Record<string, string> = {};
-        for (const c of contactsData) {
-          const nameVal = c.verifiedName || c.name;
-          if (nameVal) {
-            if (c.id) contactsMap[c.id] = nameVal;
-            if (c.phoneNumber) contactsMap[c.phoneNumber] = nameVal;
-          }
-        }
-        
-        try {
-          localStorage.setItem('waha_contacts_map', JSON.stringify(contactsMap));
-        } catch (e) {}
+        const chunkSize = 500;
+        let index = 0;
 
-        set({ contactsMap, isContactsLoaded: true });
-        
-        // Update names of currently loaded conversations in-place to avoid heavy loadChats reload
-        set((state) => ({
-          conversations: state.conversations.map(c => {
-            const phone = c.id.split('@')[0];
-            const name = contactsMap[c.id] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || c.contact.name;
-            return {
-              ...c,
-              contact: { ...c.contact, name }
-            };
-          })
-        }));
+        const processChunk = () => {
+          const end = Math.min(index + chunkSize, contactsData.length);
+          for (let i = index; i < end; i++) {
+            const c = contactsData[i];
+            const nameVal = c.verifiedName || c.name;
+            if (nameVal) {
+              if (c.id) contactsMap[c.id] = nameVal;
+              if (c.phoneNumber) contactsMap[c.phoneNumber] = nameVal;
+            }
+          }
+          
+          index = end;
+          if (index < contactsData.length) {
+            setTimeout(processChunk, 10);
+          } else {
+            // Done processing all contacts
+            try {
+              localStorage.setItem('waha_contacts_map', JSON.stringify(contactsMap));
+            } catch (e) {
+              console.error("[Storage] Failed to save contacts map to localStorage:", e);
+            }
+            
+            set({ contactsMap, isContactsLoaded: true, isSyncingContacts: false });
+            
+            // Update names of currently loaded conversations in-place
+            set((state) => ({
+              conversations: state.conversations.map(c => {
+                const phone = c.id.split('@')[0];
+                const name = contactsMap[c.id] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || c.contact.name;
+                return {
+                  ...c,
+                  contact: { ...c.contact, name }
+                };
+              })
+            }));
+          }
+        };
+
+        processChunk();
+      } else {
+        set({ isSyncingContacts: false });
       }
     } catch (err) {
       console.error("Failed to load contacts:", err);
+      set({ isSyncingContacts: false });
     }
+  },
+  syncContacts: async () => {
+    set({ isContactsLoaded: false });
+    await get().loadContacts();
   },
   loadMessages: async (chatId, isPriority = false) => {
     const user = get().user;
@@ -705,7 +872,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingChatId: chatId });
 
     try {
-      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30&downloadMedia=true`, {
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30&downloadMedia=false`, {
         headers: getWahaHeaders(get),
         signal: controller.signal
       });

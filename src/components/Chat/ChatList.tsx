@@ -65,7 +65,24 @@ const ChatAvatar = ({ chatId, name, isActive }: { chatId: string; name: string; 
 };
 
 export default function ChatList() {
-  const { conversations, activeConversationId, setActiveConversation, customFields, wahaSessionStatus, loadChats, profilePictures, fetchProfilePicture, isLoadingChats, loadMessages, archiveConversation, unarchiveConversation } = useAppStore();
+  const { 
+    conversations, 
+    activeConversationId, 
+    setActiveConversation, 
+    customFields, 
+    wahaSessionStatus, 
+    loadChats, 
+    profilePictures, 
+    fetchProfilePicture, 
+    isLoadingChats, 
+    loadMessages, 
+    archiveConversation, 
+    unarchiveConversation,
+    contactsMap,
+    isLoadingMoreChats,
+    hasMoreChats,
+    loadMoreChats
+  } = useAppStore();
   const hoverTimeoutRef = useRef<Record<string, any>>({});
   const [viewMode, setViewMode] = useState<'active' | 'archived'>('active');
 
@@ -78,6 +95,15 @@ export default function ChatList() {
       return () => clearInterval(interval);
     }
   }, [wahaSessionStatus, loadChats]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 100) {
+      if (!isLoadingMoreChats && hasMoreChats && wahaSessionStatus === 'CONNECTED') {
+        loadMoreChats();
+      }
+    }
+  };
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedFilterField, setSelectedFilterField] = useState('');
@@ -88,7 +114,7 @@ export default function ChatList() {
   }, [conversations]);
 
   const filteredConversations = useMemo(() => {
-    return conversations.filter(conv => {
+    const matches = conversations.filter(conv => {
       // 1. Archive check
       const isConvArchived = !!conv.isArchived;
       if (viewMode === 'active' && isConvArchived) return false;
@@ -115,7 +141,53 @@ export default function ChatList() {
 
       return true;
     });
-  }, [conversations, searchTerm, selectedFilterField, selectedFilterValue, viewMode]);
+
+    // 4. Contact Map Search fallback (find matching contacts who don't have a loaded conversation)
+    const searchTrimmed = searchTerm.trim().toLowerCase();
+    if (searchTrimmed && viewMode === 'active') {
+      const conversationIds = new Set(conversations.map(c => c.id));
+      const conversationPhones = new Set(conversations.map(c => c.contact.phone));
+      const matchedContacts: typeof conversations = [];
+
+      for (const [key, value] of Object.entries(contactsMap)) {
+        const contactId = key;
+        const name = value;
+        const phone = contactId.split('@')[0];
+
+        // Skip if they already have an active conversation
+        if (conversationIds.has(contactId) || conversationPhones.has(phone)) {
+          continue;
+        }
+
+        const matchesSearch = name.toLowerCase().includes(searchTrimmed) || phone.includes(searchTrimmed);
+        if (matchesSearch) {
+          matchedContacts.push({
+            id: contactId,
+            contact: {
+              id: contactId,
+              name: name,
+              phone: phone,
+              status: 'Lead',
+            },
+            unreadCount: 0,
+            messages: [],
+            lastActivity: 0,
+            isArchived: false,
+            hasLoadedHistory: false
+          });
+        }
+
+        // Limit matching contacts from memory to avoid heavy rendering
+        if (matchedContacts.length >= 30) {
+          break;
+        }
+      }
+
+      return [...matches, ...matchedContacts];
+    }
+
+    return matches;
+  }, [conversations, searchTerm, selectedFilterField, selectedFilterValue, viewMode, contactsMap]);
 
   // Pre-fetch search results in background as soon as they appear in search
   useEffect(() => {
@@ -236,7 +308,10 @@ export default function ChatList() {
           <span className="text-sm font-medium">Carregando conversas...</span>
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto border-t border-stone-100 flex flex-col">
+        <div 
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto border-t border-stone-100 flex flex-col"
+        >
           {/* Aba de arquivados no topo da lista se houver arquivadas */}
           {viewMode === 'active' && archivedCount > 0 && (
             <button 
@@ -365,6 +440,12 @@ export default function ChatList() {
                 </div>
               )
             })
+          )}
+          {isLoadingMoreChats && (
+            <div className="flex items-center justify-center p-3 text-stone-500 gap-2 border-t border-stone-55 bg-stone-50/50">
+              <Loader2 className="animate-spin text-orange-500" size={16} />
+              <span className="text-xs font-medium text-stone-500">Carregando mais...</span>
+            </div>
           )}
         </div>
       )}

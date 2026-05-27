@@ -15,6 +15,8 @@ export default function SettingsView() {
     checkWahaStatus,
     startWahaSession,
     stopWahaSession,
+    isSyncingContacts,
+    syncContacts,
     user
   } = useAppStore();
 
@@ -153,7 +155,23 @@ export default function SettingsView() {
                   </p>
                 </div>
 
-                <div className="shrink-0">
+                <div className="shrink-0 flex items-center gap-3">
+                  {wahaSessionStatus === 'CONNECTED' && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await syncContacts();
+                        } catch (e) {
+                          console.error("Sync failed", e);
+                        }
+                      }}
+                      disabled={isSyncingContacts}
+                      className="px-4 py-2 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-sm font-semibold rounded-lg transition disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <RefreshCw size={14} className={isSyncingContacts ? "animate-spin" : ""} />
+                      {isSyncingContacts ? "Sincronizando..." : "Sincronizar Contatos"}
+                    </button>
+                  )}
                   {wahaSessionStatus === 'CONNECTED' || wahaSessionStatus === 'SCAN_QR_CODE' ? (
                     <button
                       onClick={handleDisconnect}
