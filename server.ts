@@ -85,20 +85,15 @@ async function startServer() {
       const contentType = response.headers.get("content-type") || "";
       res.status(response.status);
       
-      if (contentType.includes("image") || contentType.includes("octet-stream")) {
+      if (contentType.toLowerCase().includes("application/json")) {
+        const json = await response.json();
+        return res.json(json);
+      } else {
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
-        res.setHeader("Content-Type", contentType);
+        const finalContentType = req.query.mimeType || contentType;
+        res.setHeader("Content-Type", finalContentType);
         return res.send(buffer);
-      } else {
-        const text = await response.text();
-        try {
-          const json = JSON.parse(text);
-          res.setHeader("Content-Type", "application/json");
-          return res.json(json);
-        } catch {
-          return res.send(text);
-        }
       }
     } catch (err: any) {
       console.error("WAHA Proxy error:", err);

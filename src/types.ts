@@ -39,6 +39,7 @@ export interface Conversation {
   messages: Message[];
   lastActivity?: number;
   hasLoadedHistory?: boolean;
+  isArchived?: boolean;
 }
 
 export interface FunnelStage {

@@ -46,6 +46,14 @@ interface AppState {
   addTemplate: (tpl: Omit<MessageTemplate, 'id'>) => void;
   removeTemplate: (id: string) => void;
 
+  archiveConversation: (id: string) => Promise<void>;
+  unarchiveConversation: (id: string) => Promise<void>;
+  clearConversationMessages: (id: string) => Promise<void>;
+  deleteConversation: (id: string) => Promise<void>;
+  sendImageMessage: (conversationId: string, base64Data: string, mimeType: string, filename: string, caption?: string) => Promise<void>;
+  sendVoiceMessage: (conversationId: string, base64Data: string, mimeType: string) => Promise<void>;
+  sendFileMessage: (conversationId: string, base64Data: string, mimeType: string, filename: string) => Promise<void>;
+
   // WAHA Integration
   wahaUrl: string;
   wahaApiKey: string;
@@ -194,39 +202,69 @@ const getWahaSessionName = (user: any) => {
   return `${name}-${user.id}`;
 };
 
-const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string): Message => {
+const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionName?: string): Message => {
   let msgType: Message['type'] = 'TEXT';
   let content = msg.body || '';
   let mediaUrl: string | undefined = undefined;
   
-  if (msg.hasMedia) {
-    const mime = msg.media?.mimetype || '';
-    if (msg.media?.url && wahaUrl) {
-      try {
-        const urlString = msg.media.url;
-        const wahaUrlParam = `wahaUrl=${encodeURIComponent(wahaUrl)}`;
-        const apiKeyParam = apiKey ? `&apiKey=${encodeURIComponent(apiKey)}` : '';
-        
-        if (urlString.startsWith('http')) {
-          const urlObj = new URL(urlString);
-          mediaUrl = `/api/waha-proxy${urlObj.pathname}?${wahaUrlParam}${apiKeyParam}`;
-        } else {
-          const cleanPath = urlString.startsWith('/') ? urlString : `/${urlString}`;
-          mediaUrl = `/api/waha-proxy${cleanPath}?${wahaUrlParam}${apiKeyParam}`;
-        }
-      } catch (e) {
-        console.error("Failed to parse media URL:", e);
-      }
+  // 1. Classification based on WAHA message type
+  const wahaType = (msg.type || '').toLowerCase();
+  if (wahaType === 'image') {
+    msgType = 'IMAGE';
+    content = msg.body || '📷 Imagem';
+  } else if (wahaType === 'audio' || wahaType === 'voice' || wahaType === 'ptt') {
+    msgType = 'AUDIO';
+    content = msg.body || '🎵 Áudio';
+  }
+  
+  // 2. Determine if message should have media
+  const hasMediaFile = msg.hasMedia || wahaType === 'image' || wahaType === 'audio' || wahaType === 'voice' || wahaType === 'ptt';
+  
+  if (hasMediaFile) {
+    let mime = msg.media?.mimetype || '';
+    if (!mime) {
+      if (wahaType === 'image') mime = 'image/jpeg';
+      else if (wahaType === 'audio' || wahaType === 'voice' || wahaType === 'ptt') mime = 'audio/ogg';
     }
 
-    if (mime.startsWith('audio')) {
-      msgType = 'AUDIO';
-      content = msg.body || '🎵 Áudio';
-    } else if (mime.startsWith('image')) {
-      msgType = 'IMAGE';
-      content = msg.body || '📷 Imagem';
-    } else {
-      content = msg.body || '📁 Arquivo';
+    if (msgType === 'TEXT') {
+      if (mime.startsWith('audio')) {
+        msgType = 'AUDIO';
+        content = msg.body || '🎵 Áudio';
+      } else if (mime.startsWith('image')) {
+        msgType = 'IMAGE';
+        content = msg.body || '📷 Imagem';
+      } else {
+        content = msg.body || '📁 Arquivo';
+      }
+    }
+    
+    // 3. Construct media URL
+    // We prioritize the direct URL from WAHA. If it's not present (e.g. WebSocket updates or expired files),
+    // we use the official message-based file download endpoint which forces WAHA to fetch it on the fly.
+    const fileSource = msg.media?.url || (msg.media?.filename ? `/api/files/${msg.media.filename}` : '');
+    if (wahaUrl) {
+      const wahaUrlParam = `wahaUrl=${encodeURIComponent(wahaUrl)}`;
+      const apiKeyParam = apiKey ? `&apiKey=${encodeURIComponent(apiKey)}` : '';
+      const mimeParam = mime ? `&mimeType=${encodeURIComponent(mime)}` : '';
+
+      if (fileSource) {
+        try {
+          const urlString = fileSource;
+          if (urlString.startsWith('http')) {
+            const urlObj = new URL(urlString);
+            mediaUrl = `/api/waha-proxy${urlObj.pathname}?${wahaUrlParam}${apiKeyParam}${mimeParam}`;
+          } else {
+            const cleanPath = urlString.startsWith('/') ? urlString : `/${urlString}`;
+            mediaUrl = `/api/waha-proxy${cleanPath}?${wahaUrlParam}${apiKeyParam}${mimeParam}`;
+          }
+        } catch (e) {
+          console.error("Failed to parse media URL:", e);
+        }
+      } else if (sessionName) {
+        // Fallback for real-time WebSocket events or expired files: dynamic download by message ID
+        mediaUrl = `/api/waha-proxy/api/${sessionName}/messages/${msg.id}/download/file?${wahaUrlParam}${apiKeyParam}${mimeParam}`;
+      }
     }
   }
   
@@ -387,8 +425,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   templates: mockTemplates,
   setActiveConversation: (id) => {
     set({ activeConversationId: id });
-    if (id && get().wahaSessionStatus === 'CONNECTED') {
-      get().loadMessages(id, true);
+    if (id) {
+      // Limpar o contador de não lidas localmente de forma otimista
+      set((state) => ({
+        conversations: state.conversations.map(c => 
+          c.id === id ? { ...c, unreadCount: 0 } : c
+        )
+      }));
+
+      if (get().wahaSessionStatus === 'CONNECTED') {
+        get().loadMessages(id, true);
+        
+        // Notificar o WAHA para marcar a conversa como lida (envia o check azul)
+        const user = get().user;
+        if (user) {
+          const sessionName = getWahaSessionName(user);
+          fetch(`/api/waha-proxy/api/${sessionName}/chats/${id}/read`, {
+            method: 'POST',
+            headers: getWahaHeaders(get)
+          }).catch(err => console.error("Failed to mark chat as read in WAHA:", err));
+        }
+      }
     }
   },
   sendMessage: async (conversationId, content) => {
@@ -450,77 +507,81 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     try {
-      // Fetch chats and messages in parallel
-      const [chatsRes, msgsRes] = await Promise.all([
-        fetch(`/api/waha-proxy/api/${sessionName}/chats`, {
-          headers: getWahaHeaders(get)
-        }),
-        fetch(`/api/waha-proxy/api/${sessionName}/chats/all/messages?limit=50&downloadMedia=true`, {
-          headers: getWahaHeaders(get)
-        })
-      ]);
+      // Fetch chats overview (which includes recent chat list and the last message details in a single query)
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/overview?limit=40`, {
+        headers: getWahaHeaders(get)
+      });
 
-      if (!chatsRes.ok) throw new Error("Failed to fetch chats");
-      const chatsData = await chatsRes.json();
-
-      let globalMsgs: any[] = [];
-      if (msgsRes.ok) {
-        globalMsgs = await msgsRes.json();
-      }
-
-      // Group recent messages by chat ID
-      const msgsByChat: Record<string, any[]> = {};
-      for (const m of globalMsgs) {
-        const cId = m._data?.key?.remoteJid || (m.fromMe ? m.to : m.from);
-        if (cId) {
-          if (!msgsByChat[cId]) msgsByChat[cId] = [];
-          msgsByChat[cId].push(m);
-        }
-      }
+      if (!res.ok) throw new Error("Failed to fetch chats overview");
+      const overviewData = await res.json();
 
       const contactsMap = get().contactsMap;
+      const profilePictures = { ...get().profilePictures };
+      let profilePicsUpdated = false;
 
-      // 3. Map to Conversation structure
-      const mappedConversations: Conversation[] = chatsData
+      const mappedConversations: Conversation[] = overviewData
         .filter((c: any) => c.id && c.id !== 'status@broadcast')
         .map((c: any) => {
           const chatId = c.id;
           const phone = chatId.split('@')[0];
-          
-          // Resolve name from c.name or from the contacts address book map
+
+          // Extract profile picture if available in overview DTO to avoid loading queue
+          if (c.picture && c.picture !== 'FAILED' && !profilePictures[chatId]) {
+            profilePictures[chatId] = c.picture;
+            profilePicsUpdated = true;
+          }
+
+          // Resolve contact name from overview or cache
           let name = c.name;
           if (!name) {
             name = contactsMap[chatId] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || phone;
           }
-
-          // Clean up formatting/name if it starts with strange chars
           if (name && name.startsWith('*\n')) {
             name = name.replace('*\n', '');
           }
 
-          // Find messages for this chat in the global list, convert them
-          const wahaMsgs = msgsByChat[chatId] || [];
-          const newMessages = wahaMsgs.map(msg => wahaMsgToMessage(msg, get().wahaUrl, get().wahaApiKey));
-          
-          // Preserve existing loaded messages for this chat to avoid dropping history
-          const existingConv = get().conversations.find(c => c.id === chatId);
-          const msgMap = new Map<string, Message>();
-          if (existingConv) {
+          // Process last message if it exists
+          let messages: Message[] = [];
+          let lastMsg: Message | null = null;
+          if (c.lastMessage) {
+            const msgText = c.lastMessage.text || '';
+            let msgType: Message['type'] = 'TEXT';
+            if (msgText.startsWith('📷') || msgText.includes('Imagem') || msgText.toLowerCase().includes('photo')) {
+              msgType = 'IMAGE';
+            } else if (msgText.startsWith('🎵') || msgText.includes('Áudio') || msgText.toLowerCase().includes('voice') || msgText.toLowerCase().includes('audio') || msgText.toLowerCase().includes('ptt')) {
+              msgType = 'AUDIO';
+            }
+
+            lastMsg = {
+              id: c.lastMessage.id,
+              content: msgText,
+              timestamp: new Date(c.lastMessage.timestamp * 1000).toISOString(),
+              isFromMe: c.lastMessage.fromMe,
+              type: msgType
+            };
+          }
+
+          // Merge last message with existing historical messages
+          const existingConv = get().conversations.find(conv => conv.id === chatId);
+          if (existingConv && existingConv.messages.length > 0) {
+            const msgMap = new Map<string, Message>();
             for (const m of existingConv.messages) {
               msgMap.set(m.id, m);
             }
+            if (lastMsg) {
+              msgMap.set(lastMsg.id, lastMsg);
+            }
+            messages = Array.from(msgMap.values()).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+          } else if (lastMsg) {
+            messages = [lastMsg];
           }
-          for (const m of newMessages) {
-            msgMap.set(m.id, m);
-          }
-          
-          const messages = Array.from(msgMap.values())
-            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-          const lastMsg = messages[messages.length - 1];
-          const lastActivity = lastMsg 
-            ? new Date(lastMsg.timestamp).getTime() 
+          const lastActivity = lastMsg
+            ? new Date(lastMsg.timestamp).getTime()
             : (c.conversationTimestamp ? c.conversationTimestamp * 1000 : 0);
+
+          // Get archive status (supported by WAHA engine DTOs)
+          const isArchived = c.archive || c.archived || c._chat?.archive || c._chat?.archived || false;
 
           return {
             id: chatId,
@@ -528,15 +589,21 @@ export const useAppStore = create<AppState>((set, get) => ({
               id: chatId,
               name: name,
               phone: phone,
-              status: 'Lead', // Default status
+              status: 'Lead',
             },
-            unreadCount: c.unreadCount || c.unreadMentionCount || 0,
+            unreadCount: c._chat?.unreadCount || c.unreadCount || c._chat?.unreadMentionCount || 0,
             messages: messages,
-            lastActivity: lastActivity
+            lastActivity: lastActivity,
+            isArchived: isArchived,
+            hasLoadedHistory: existingConv ? existingConv.hasLoadedHistory : false
           };
         });
 
-      // 4. Sort conversations: most recent activity at the top
+      if (profilePicsUpdated) {
+        set({ profilePictures });
+      }
+
+      // Sort: most recent activity at the top
       mappedConversations.sort((a, b) => {
         const timeA = a.lastActivity || 0;
         const timeB = b.lastActivity || 0;
@@ -545,20 +612,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ conversations: mappedConversations });
 
-      // Pre-fetch messages for top 5 chats in background to make selecting them instant
+      // Pre-fetch messages for top 5 chats in background (lazy load)
       const topChats = mappedConversations.slice(0, 5);
       for (const chat of topChats) {
-        if (chat.messages.length <= 5) {
+        if (chat.messages.length <= 1) {
           get().loadMessages(chat.id);
         }
       }
 
-      // Non-blocking trigger: load contacts in background if they haven't been loaded yet
+      // Non-blocking trigger: load contacts in background
       if (!get().isContactsLoaded) {
         get().loadContacts();
       }
     } catch (err) {
-      console.error("Failed to load WAHA chats:", err);
+      console.error("Failed to load WAHA chats overview:", err);
     } finally {
       set({ isLoadingChats: false, isChatsInitialLoaded: true });
     }
@@ -641,7 +708,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       
       const wahaMsgs = await res.json();
       const messages = wahaMsgs
-        .map(msg => wahaMsgToMessage(msg, get().wahaUrl, get().wahaApiKey))
+        .map(msg => wahaMsgToMessage(msg, get().wahaUrl, get().wahaApiKey, sessionName))
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
       // Update messages in the specific conversation in state
@@ -959,6 +1026,246 @@ export const useAppStore = create<AppState>((set, get) => ({
     templates: state.templates.filter(t => t.id !== id)
   })),
 
+  archiveConversation: async (id) => {
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    // Optimistically update local state to archive chat
+    set((state) => ({
+      conversations: state.conversations.map(c => 
+        c.id === id ? { ...c, isArchived: true } : c
+      ),
+      activeConversationId: state.activeConversationId === id ? null : state.activeConversationId
+    }));
+
+    try {
+      const escapedId = encodeURIComponent(id);
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${escapedId}/archive`, {
+        method: 'POST',
+        headers: getWahaHeaders(get)
+      });
+      if (!res.ok) throw new Error("Failed to archive chat on WAHA");
+    } catch (err) {
+      console.error("Failed to archive conversation:", err);
+    }
+  },
+
+  unarchiveConversation: async (id) => {
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    // Optimistically update local state to unarchive chat
+    set((state) => ({
+      conversations: state.conversations.map(c => 
+        c.id === id ? { ...c, isArchived: false } : c
+      )
+    }));
+
+    try {
+      const escapedId = encodeURIComponent(id);
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${escapedId}/unarchive`, {
+        method: 'POST',
+        headers: getWahaHeaders(get)
+      });
+      if (!res.ok) throw new Error("Failed to unarchive chat on WAHA");
+    } catch (err) {
+      console.error("Failed to unarchive conversation:", err);
+    }
+  },
+
+  clearConversationMessages: async (id) => {
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    // Optimistically clear local messages
+    set((state) => ({
+      conversations: state.conversations.map(c => 
+        c.id === id ? { ...c, messages: [] } : c
+      )
+    }));
+
+    try {
+      const escapedId = encodeURIComponent(id);
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${escapedId}/messages`, {
+        method: 'DELETE',
+        headers: getWahaHeaders(get)
+      });
+      if (!res.ok) throw new Error("Failed to clear chat messages on WAHA");
+    } catch (err) {
+      console.error("Failed to clear chat messages:", err);
+    }
+  },
+
+  deleteConversation: async (id) => {
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    // Optimistically remove conversation from state
+    set((state) => ({
+      conversations: state.conversations.filter(c => c.id !== id),
+      activeConversationId: state.activeConversationId === id ? null : state.activeConversationId
+    }));
+
+    try {
+      const escapedId = encodeURIComponent(id);
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${escapedId}`, {
+        method: 'DELETE',
+        headers: getWahaHeaders(get)
+      });
+      if (!res.ok) throw new Error("Failed to delete chat on WAHA");
+    } catch (err) {
+      console.error("Failed to delete conversation:", err);
+    }
+  },
+
+  sendImageMessage: async (conversationId, base64Data, mimeType, filename, caption) => {
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    // Create optimistic message
+    const optimisticMsg: Message = {
+      id: 'opt_' + Math.random().toString(36).substring(7),
+      content: caption || '📷 Imagem',
+      timestamp: new Date().toISOString(),
+      isFromMe: true,
+      type: 'IMAGE',
+      mediaUrl: `data:${mimeType};base64,${base64Data}`
+    };
+
+    // Optimistically update UI
+    set((state) => ({
+      conversations: state.conversations.map(c => 
+        c.id === conversationId 
+          ? { ...c, messages: [...c.messages, optimisticMsg] } 
+          : c
+      )
+    }));
+
+    try {
+      const res = await fetch(`/api/waha-proxy/api/sendImage`, {
+        method: 'POST',
+        headers: getWahaHeaders(get),
+        body: JSON.stringify({
+          session: sessionName,
+          chatId: conversationId,
+          file: {
+            mimetype: mimeType,
+            data: base64Data,
+            filename: filename
+          },
+          caption: caption || ""
+        })
+      });
+
+      if (!res.ok) throw new Error("Failed to send image message on WAHA");
+
+      // Reload messages for the active conversation
+      await get().loadMessages(conversationId);
+    } catch (err) {
+      console.error("Failed to send image message:", err);
+    }
+  },
+
+  sendVoiceMessage: async (conversationId, base64Data, mimeType) => {
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    // Create optimistic message
+    const optimisticMsg: Message = {
+      id: 'opt_' + Math.random().toString(36).substring(7),
+      content: '🎵 Áudio',
+      timestamp: new Date().toISOString(),
+      isFromMe: true,
+      type: 'AUDIO',
+      mediaUrl: `data:${mimeType};base64,${base64Data}`
+    };
+
+    // Optimistically update UI
+    set((state) => ({
+      conversations: state.conversations.map(c => 
+        c.id === conversationId 
+          ? { ...c, messages: [...c.messages, optimisticMsg] } 
+          : c
+      )
+    }));
+
+    try {
+      const res = await fetch(`/api/waha-proxy/api/sendVoice`, {
+        method: 'POST',
+        headers: getWahaHeaders(get),
+        body: JSON.stringify({
+          session: sessionName,
+          chatId: conversationId,
+          file: {
+            mimetype: mimeType,
+            data: base64Data,
+            filename: "voice.ogg"
+          }
+        })
+      });
+
+      if (!res.ok) throw new Error("Failed to send voice message on WAHA");
+
+      // Reload messages for the active conversation
+      await get().loadMessages(conversationId);
+    } catch (err) {
+      console.error("Failed to send voice message:", err);
+    }
+  },
+
+  sendFileMessage: async (conversationId, base64Data, mimeType, filename) => {
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    // Create optimistic message
+    const optimisticMsg: Message = {
+      id: 'opt_' + Math.random().toString(36).substring(7),
+      content: `📁 ${filename}`,
+      timestamp: new Date().toISOString(),
+      isFromMe: true,
+      type: 'TEXT'
+    };
+
+    // Optimistically update UI
+    set((state) => ({
+      conversations: state.conversations.map(c => 
+        c.id === conversationId 
+          ? { ...c, messages: [...c.messages, optimisticMsg] } 
+          : c
+      )
+    }));
+
+    try {
+      const res = await fetch(`/api/waha-proxy/api/sendFile`, {
+        method: 'POST',
+        headers: getWahaHeaders(get),
+        body: JSON.stringify({
+          session: sessionName,
+          chatId: conversationId,
+          file: {
+            mimetype: mimeType,
+            data: base64Data,
+            filename: filename
+          }
+        })
+      });
+
+      if (!res.ok) throw new Error("Failed to send file message on WAHA");
+
+      // Reload messages for the active conversation
+      await get().loadMessages(conversationId);
+    } catch (err) {
+      console.error("Failed to send file message:", err);
+    }
+  },
+
   // WAHA Integration
   wahaUrl: 'https://waha.kasaweb.online',
   wahaApiKey: '52c9d4d5cd513754c859548f10cab5bdabd2190c92aa9bdbbd8291473de0df43',
@@ -1166,7 +1473,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           
           if (data.session !== sessionName) return;
 
-          const msg = wahaMsgToMessage(msgPayload);
+          const msg = wahaMsgToMessage(msgPayload, get().wahaUrl, get().wahaApiKey, sessionName);
           const chatId = msgPayload.fromMe ? msgPayload.to : msgPayload.from;
           if (!chatId) return;
 
@@ -1236,7 +1543,13 @@ useAppStore.subscribe((state) => {
   if (state.conversations !== lastConversations) {
     lastConversations = state.conversations;
     try {
-      localStorage.setItem('zapfunil_conversations_cache', JSON.stringify(state.conversations));
+      // Limitar o cache para salvar apenas as últimas 15 mensagens de cada conversa.
+      // Isso evita estouro de cota (QuotaExceededError) no localStorage (limite de 5MB).
+      const cacheFriendly = state.conversations.map(c => ({
+        ...c,
+        messages: c.messages.slice(-15)
+      }));
+      localStorage.setItem('zapfunil_conversations_cache', JSON.stringify(cacheFriendly));
     } catch (e) {
       console.error("[Store Cache] Failed to save conversations to cache:", e);
     }

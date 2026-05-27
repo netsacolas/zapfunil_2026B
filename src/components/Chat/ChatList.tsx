@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { Search, Filter, X, Loader2 } from 'lucide-react';
+import { Search, Filter, X, Loader2, Archive, ArchiveRestore, ArrowLeft } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '../../lib/utils';
 
@@ -65,8 +65,9 @@ const ChatAvatar = ({ chatId, name, isActive }: { chatId: string; name: string; 
 };
 
 export default function ChatList() {
-  const { conversations, activeConversationId, setActiveConversation, customFields, wahaSessionStatus, loadChats, profilePictures, fetchProfilePicture, isLoadingChats, loadMessages } = useAppStore();
+  const { conversations, activeConversationId, setActiveConversation, customFields, wahaSessionStatus, loadChats, profilePictures, fetchProfilePicture, isLoadingChats, loadMessages, archiveConversation, unarchiveConversation } = useAppStore();
   const hoverTimeoutRef = useRef<Record<string, any>>({});
+  const [viewMode, setViewMode] = useState<'active' | 'archived'>('active');
 
   useEffect(() => {
     if (wahaSessionStatus === 'CONNECTED') {
@@ -82,9 +83,18 @@ export default function ChatList() {
   const [selectedFilterField, setSelectedFilterField] = useState('');
   const [selectedFilterValue, setSelectedFilterValue] = useState('');
 
+  const archivedCount = useMemo(() => {
+    return conversations.filter(c => c.isArchived).length;
+  }, [conversations]);
+
   const filteredConversations = useMemo(() => {
     return conversations.filter(conv => {
-      // 1. Text Search
+      // 1. Archive check
+      const isConvArchived = !!conv.isArchived;
+      if (viewMode === 'active' && isConvArchived) return false;
+      if (viewMode === 'archived' && !isConvArchived) return false;
+
+      // 2. Text Search
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch = !searchTerm || 
         conv.contact.name.toLowerCase().includes(searchLower) ||
@@ -93,7 +103,7 @@ export default function ChatList() {
       
       if (!matchesSearch) return false;
 
-      // 2. Custom Field Filter
+      // 3. Custom Field Filter
       if (selectedFilterField && selectedFilterValue) {
         if (selectedFilterField === 'status') {
           return conv.contact.status === selectedFilterValue;
@@ -105,7 +115,7 @@ export default function ChatList() {
 
       return true;
     });
-  }, [conversations, searchTerm, selectedFilterField, selectedFilterValue]);
+  }, [conversations, searchTerm, selectedFilterField, selectedFilterValue, viewMode]);
 
   // Pre-fetch search results in background as soon as they appear in search
   useEffect(() => {
@@ -226,74 +236,136 @@ export default function ChatList() {
           <span className="text-sm font-medium">Carregando conversas...</span>
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto border-t border-stone-100">
-          {filteredConversations.map((conv) => {
-            const isActive = conv.id === activeConversationId;
-            const lastMsg = conv.messages[conv.messages.length - 1];
-            return (
-              <div 
-                key={conv.id}
-                onClick={() => {
-                  if (hoverTimeoutRef.current[conv.id]) {
-                    clearTimeout(hoverTimeoutRef.current[conv.id]);
-                    delete hoverTimeoutRef.current[conv.id];
-                  }
-                  setActiveConversation(conv.id);
-                }}
-                onMouseEnter={() => {
-                  if (conv.messages.length <= 5) {
-                    hoverTimeoutRef.current[conv.id] = setTimeout(() => {
-                      loadMessages(conv.id);
-                    }, 150);
-                  }
-                }}
-                onMouseLeave={() => {
-                  if (hoverTimeoutRef.current[conv.id]) {
-                    clearTimeout(hoverTimeoutRef.current[conv.id]);
-                    delete hoverTimeoutRef.current[conv.id];
-                  }
-                }}
-                className={cn(
-                  "flex items-center p-4 cursor-pointer border-b border-stone-100 transition-colors",
-                  isActive ? "bg-stone-100" : "hover:bg-stone-50"
-                )}
-              >
-                <ChatAvatar chatId={conv.id} name={conv.contact.name} isActive={isActive} />
-                <div className="flex-1 min-w-0 flex flex-col justify-center">
-                  <div className="flex justify-between items-baseline mb-1">
-                    <h3 className="font-semibold text-stone-900 truncate pr-2">{conv.contact.name}</h3>
-                    {lastMsg && (
-                      <span className={cn(
-                        "text-[10px] flex-shrink-0 whitespace-nowrap",
-                        isActive ? "text-orange-600 font-bold uppercase tracking-wider" : "text-stone-400"
-                      )}>
-                        {isActive ? 'AGORA' : format(new Date(lastMsg.timestamp), 'HH:mm')}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex justify-between items-center gap-2">
-                    <p className={cn(
-                      "text-xs truncate flex items-center gap-1",
-                      isActive ? "font-medium text-stone-800" : "text-stone-500"
-                    )}>
-                      {lastMsg?.type === 'AUDIO' ? (
-                        <><span>🎵</span> Áudio</>
-                      ) : lastMsg?.type === 'IMAGE' ? (
-                        <><span>📷</span> {lastMsg?.content && lastMsg?.content !== '📷 Imagem' ? lastMsg.content : 'Imagem'}</>
-                      ) : (
-                        lastMsg?.content
-                      )}
-                    </p>
-                    {conv.unreadCount > 0 && (
-                      <span className="w-5 h-5 rounded-full bg-orange-500 flex items-center justify-center text-[10px] text-white flex-shrink-0">
-                        {conv.unreadCount}
-                      </span>
-                    )}
-                  </div>
-                </div>
+        <div className="flex-1 overflow-y-auto border-t border-stone-100 flex flex-col">
+          {/* Aba de arquivados no topo da lista se houver arquivadas */}
+          {viewMode === 'active' && archivedCount > 0 && (
+            <button 
+              onClick={() => setViewMode('archived')}
+              className="w-full flex items-center justify-between p-4 border-b border-stone-100 hover:bg-stone-50 transition text-stone-600 font-semibold text-sm cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <Archive size={18} className="text-orange-500" />
+                <span>Conversas Arquivadas</span>
               </div>
-            )
-          })}
+              <span className="bg-orange-100 text-orange-700 font-bold px-2 py-0.5 text-[11px] rounded-full">
+                {archivedCount}
+              </span>
+            </button>
+          )}
+
+          {/* Botão de voltar ao visualizar arquivadas */}
+          {viewMode === 'archived' && (
+            <button 
+              onClick={() => setViewMode('active')}
+              className="w-full flex items-center gap-3 p-4 border-b border-stone-100 bg-stone-50 hover:bg-stone-100 transition text-stone-700 font-bold text-sm cursor-pointer"
+            >
+              <ArrowLeft size={18} className="text-orange-500" />
+              <span>Voltar para Conversas Ativas</span>
+            </button>
+          )}
+
+          {filteredConversations.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-stone-400 p-8 text-center">
+              <Archive size={36} className="text-stone-300 mb-2" />
+              <p className="text-xs font-semibold">Nenhuma conversa encontrada</p>
+            </div>
+          ) : (
+            filteredConversations.map((conv) => {
+              const isActive = conv.id === activeConversationId;
+              const lastMsg = conv.messages[conv.messages.length - 1];
+              return (
+                <div 
+                  key={conv.id}
+                  onClick={() => {
+                    if (hoverTimeoutRef.current[conv.id]) {
+                      clearTimeout(hoverTimeoutRef.current[conv.id]);
+                      delete hoverTimeoutRef.current[conv.id];
+                    }
+                    setActiveConversation(conv.id);
+                  }}
+                  onMouseEnter={() => {
+                    if (conv.messages.length <= 5) {
+                      hoverTimeoutRef.current[conv.id] = setTimeout(() => {
+                        loadMessages(conv.id);
+                      }, 150);
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    if (hoverTimeoutRef.current[conv.id]) {
+                      clearTimeout(hoverTimeoutRef.current[conv.id]);
+                      delete hoverTimeoutRef.current[conv.id];
+                    }
+                  }}
+                  className={cn(
+                    "flex items-center p-4 cursor-pointer border-b border-stone-100 transition-colors relative group",
+                    isActive ? "bg-stone-100" : "hover:bg-stone-50"
+                  )}
+                >
+                  <ChatAvatar chatId={conv.id} name={conv.contact.name} isActive={isActive} />
+                  <div className="flex-1 min-w-0 flex flex-col justify-center">
+                    <div className="flex justify-between items-baseline mb-1">
+                      <h3 className="font-semibold text-stone-900 truncate pr-2">{conv.contact.name}</h3>
+                      {lastMsg && (
+                        <span className={cn(
+                          "text-[10px] flex-shrink-0 whitespace-nowrap",
+                          isActive ? "text-orange-600 font-bold uppercase tracking-wider" : "text-stone-400"
+                        )}>
+                          {isActive ? 'AGORA' : format(new Date(lastMsg.timestamp), 'HH:mm')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex justify-between items-center gap-2">
+                      <p className={cn(
+                        "text-xs truncate flex items-center gap-1",
+                        isActive ? "font-medium text-stone-800" : "text-stone-500"
+                      )}>
+                        {lastMsg?.type === 'AUDIO' ? (
+                          <><span>🎵</span> Áudio</>
+                        ) : lastMsg?.type === 'IMAGE' ? (
+                          <><span>📷</span> {lastMsg?.content && lastMsg?.content !== '📷 Imagem' ? lastMsg.content : 'Imagem'}</>
+                        ) : (
+                          lastMsg?.content
+                        )}
+                      </p>
+                      {conv.unreadCount > 0 && (
+                        <span className="w-5 h-5 rounded-full bg-orange-500 flex items-center justify-center text-[10px] text-white flex-shrink-0">
+                          {conv.unreadCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Botões de Ações Rápidas em Hover */}
+                  <div className="absolute right-4 bottom-2.5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center bg-white border border-stone-200 rounded-lg p-0.5 shadow-md z-10">
+                    {conv.isArchived ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          unarchiveConversation(conv.id);
+                        }}
+                        className="p-1 text-stone-500 hover:text-orange-600 rounded transition-colors cursor-pointer"
+                        title="Desarquivar Conversa"
+                      >
+                        <ArchiveRestore size={15} />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          archiveConversation(conv.id);
+                        }}
+                        className="p-1 text-stone-500 hover:text-orange-600 rounded transition-colors cursor-pointer"
+                        title="Arquivar Conversa"
+                      >
+                        <Archive size={15} />
+                      </button>
+                    )}
+                  </div>
+
+                </div>
+              )
+            })
+          )}
         </div>
       )}
     </div>
