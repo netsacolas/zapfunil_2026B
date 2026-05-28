@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useAppStore } from '../../store/useAppStore';
+import { useAppStore, getWahaSessionName } from '../../store/useAppStore';
+import { Message } from '../../types';
 import { MoreVertical, Paperclip, Smile, Mic, Send, Bot, CalendarClock, X, Loader2, Play, Pause, Archive, ArchiveRestore, Trash2, Check, FileText, FileSpreadsheet, Download, Video } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 import { cn } from '../../lib/utils';
@@ -7,19 +8,124 @@ import { io } from "socket.io-client";
 
 import { ChatAvatar } from './ChatAvatar';
 
-const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromMe: boolean }) => {
+// Componente de imagem com carregamento progressivo:
+// mostra thumbnail embaçado inicialmente, carrega imagem completa ao passar o mouse
+const ImageMessage = ({
+  msg,
+  chatId,
+  onOpenFull
+}: {
+  msg: Message;
+  chatId: string | null;
+  onOpenFull: (url: string) => void;
+}) => {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [fullLoadedLocal, setFullLoadedLocal] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const downloadMessageMedia = useAppStore(s => s.downloadMessageMedia);
+
+  const thumbnail = msg.thumbnailBase64;
+  const fullSrc = msg.mediaUrl || null;
+
+  useEffect(() => {
+    if (!fullSrc) {
+      setFullLoadedLocal(false);
+    }
+  }, [fullSrc]);
+
+  const handleMouseEnter = async () => {
+    setIsHovered(true);
+    if (msg.mediaUrl || isDownloading || !chatId) return;
+
+    setIsDownloading(true);
+    try {
+      await downloadMessageMedia(chatId, msg.id);
+    } catch (e) {
+      console.error("Failed to download image on hover:", e);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  return (
+    <div
+      className="w-[240px] sm:w-[280px] h-[180px] sm:h-[210px] bg-stone-200/50 rounded-lg overflow-hidden flex items-center justify-center relative shadow-sm select-none"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {/* Thumbnail embaçado como placeholder de baixa resolução */}
+      {thumbnail ? (
+        <img
+          src={thumbnail}
+          alt=""
+          aria-hidden
+          className={cn(
+            "absolute inset-0 w-full h-full object-cover scale-110 transition-opacity duration-700",
+            fullLoadedLocal ? "opacity-0 pointer-events-none" : "opacity-100",
+            "blur-[4px]"
+          )}
+        />
+      ) : (
+        <div className={cn(
+          "absolute inset-0 flex flex-col items-center justify-center text-stone-400 gap-1 bg-stone-100 w-full h-full transition-opacity duration-500",
+          fullLoadedLocal ? "opacity-0 pointer-events-none" : "opacity-100"
+        )}>
+          <span className="text-xl">📷</span>
+          <span className="text-[10px] font-medium text-stone-500">Passar mouse para carregar</span>
+        </div>
+      )}
+
+      {/* Imagem em qualidade completa */}
+      {fullSrc && (
+        <img
+          src={fullSrc}
+          alt="Imagem da conversa"
+          className={cn(
+            "absolute inset-0 w-full h-full object-cover cursor-pointer transition-opacity duration-500",
+            fullLoadedLocal ? "opacity-100" : "opacity-0"
+          )}
+          onLoad={() => setFullLoadedLocal(true)}
+          onError={() => { setFullLoadedLocal(false); }}
+          onClick={() => onOpenFull(fullSrc)}
+        />
+      )}
+
+      {/* Overlay ao passar o mouse quando imagem está baixando */}
+      {isDownloading && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-black/30 backdrop-blur-[1px]">
+          <Loader2 className="animate-spin text-white drop-shadow-md" size={24} />
+          <span className="text-white text-[10px] font-medium mt-1 drop-shadow">Carregando...</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+const AudioMessagePlayer = ({
+  msgId,
+  chatId,
+  audioUrl,
+  isFromMe
+}: {
+  msgId: string;
+  chatId: string | null;
+  audioUrl?: string;
+  isFromMe: boolean;
+}) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [speed, setSpeed] = useState(1);
+  const [isDownloading, setIsDownloading] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const downloadMessageMedia = useAppStore(s => s.downloadMessageMedia);
 
-  // Fallback para áudio de teste público caso a URL venha vazia (como nos dados mockados)
-  const finalUrl = audioUrl || 'https://www.w3schools.com/html/horse.mp3';
+  const finalUrl = audioUrl || '';
 
   // Forçar recarregamento do player de áudio quando a URL mudar
   useEffect(() => {
-    if (audioRef.current) {
+    if (audioRef.current && finalUrl) {
       audioRef.current.load();
       setIsPlaying(false);
       setCurrentTime(0);
@@ -28,7 +134,29 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
     }
   }, [finalUrl]);
 
-  const togglePlay = () => {
+  const togglePlay = async () => {
+    if (isDownloading) return;
+
+    if (!audioUrl) {
+      if (!chatId) return;
+      setIsDownloading(true);
+      try {
+        const url = await downloadMessageMedia(chatId, msgId);
+        if (url && audioRef.current) {
+          setTimeout(() => {
+            if (audioRef.current) {
+              audioRef.current.play().catch(e => console.error("Error playing audio after download:", e));
+            }
+          }, 150);
+        }
+      } catch (e) {
+        console.error("Failed to download audio:", e);
+      } finally {
+        setIsDownloading(false);
+      }
+      return;
+    }
+
     if (!audioRef.current) return;
     if (isPlaying) {
       audioRef.current.pause();
@@ -76,25 +204,34 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
 
   return (
     <div className="flex items-center space-x-3 p-2 rounded-lg border bg-stone-50 border-stone-100 shadow-sm w-[280px] text-stone-900">
-      <audio 
-        ref={audioRef}
-        src={finalUrl}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={handleLoadedMetadata}
-        onEnded={handleEnded}
-        preload="metadata"
-      />
+      {finalUrl && (
+        <audio 
+          ref={audioRef}
+          src={finalUrl}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={handleLoadedMetadata}
+          onEnded={handleEnded}
+          preload="metadata"
+        />
+      )}
       <button 
+        type="button"
         onClick={togglePlay}
-        disabled={!finalUrl}
+        disabled={isDownloading}
         className={cn(
           "w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0 transition-colors shadow-sm cursor-pointer", 
-          isFromMe ? "bg-[#00A884] hover:bg-[#009675]" : "bg-orange-500 hover:bg-orange-600"
+          isFromMe ? "bg-[#00A884] hover:bg-[#009675]" : "bg-stone-600 hover:bg-stone-700"
         )}
       >
-        {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} className="ml-0.5" fill="currentColor" />}
+        {isDownloading ? (
+          <Loader2 className="animate-spin text-white" size={16} />
+        ) : isPlaying ? (
+          <Pause size={16} fill="currentColor" />
+        ) : (
+          <Play size={16} className="ml-0.5" fill="currentColor" />
+        )}
       </button>
       <div className="flex-1 flex flex-col justify-center min-w-0">
         <div 
@@ -108,19 +245,24 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
           }}
         >
           <div 
-            className={cn("absolute left-0 top-0 h-full transition-[width] duration-75", isFromMe ? "bg-[#00A884]" : "bg-orange-500")}
+            className={cn("absolute left-0 top-0 h-full transition-[width] duration-75", isFromMe ? "bg-[#00A884]" : "bg-stone-500")}
             style={{ width: `${progress}%` }}
           ></div>
         </div>
         <div className="flex justify-between items-center mt-1 text-[10px] text-stone-500">
           <span>{formatTime(currentTime)}</span>
-          <span>{duration ? formatTime(duration) : '--:--'}</span>
+          {isDownloading ? (
+            <span className="font-semibold text-[#00A884] animate-pulse">Baixando...</span>
+          ) : (
+            <span>{duration ? formatTime(duration) : '--:--'}</span>
+          )}
         </div>
       </div>
       <button 
         type="button"
         onClick={toggleSpeed}
-        className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-stone-200 hover:bg-stone-300 border border-stone-300 text-stone-700 transition-colors flex-shrink-0 cursor-pointer"
+        disabled={isDownloading || !audioUrl}
+        className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-stone-200 hover:bg-stone-300 border border-stone-300 text-stone-700 transition-colors flex-shrink-0 cursor-pointer min-w-[32px] text-center select-none"
         title="Velocidade de Reprodução"
       >
         {speed}x
@@ -170,7 +312,8 @@ const getFileMetadata = (filename?: string) => {
 };
 
 export default function ChatHistory() {
-  const { conversations, activeConversationId, sendMessage, addScheduledMessage, wahaSessionStatus, loadMessages, loadOlderMessages, isLoadingOlderMessages, hasMoreOlderMessages, profilePictures, fetchProfilePicture, loadingChatId, archiveConversation, unarchiveConversation, clearConversationMessages, deleteConversation, sendImageMessage, sendVoiceMessage, sendFileMessage } = useAppStore();
+  const { conversations, activeConversationId, sendMessage, addScheduledMessage, wahaSessionStatus, loadMessages, loadOlderMessages, isLoadingOlderMessages, hasMoreOlderMessages, profilePictures, fetchProfilePicture, loadingChatId, archiveConversation, unarchiveConversation, clearConversationMessages, deleteConversation, sendImageMessage, sendVoiceMessage, sendFileMessage, wahaUrl, wahaApiKey, user } = useAppStore();
+  const sessionName = getWahaSessionName(user);
   const [inputText, setInputText] = useState('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
@@ -184,7 +327,6 @@ export default function ChatHistory() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
   const isAtBottomRef = useRef(true);
-  const wasLoadingOlderRef = useRef(false);
 
   // File upload state & ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -234,16 +376,11 @@ export default function ChatHistory() {
       const wasScrolledUp = !isAtBottomRef.current;
 
       if (wasScrolledUp && prevCount > 0) {
-        // Preserve scroll position when older messages were prepended
+        // Preserva a posição do scroll ao adicionar mensagens antigas no topo
         const oldScrollHeight = container.scrollHeight;
         requestAnimationFrame(() => {
           const newScrollHeight = container.scrollHeight;
           container.scrollTop += newScrollHeight - oldScrollHeight;
-          // Após restaurar a posição, verificar se ainda estamos no topo
-          // Se sim, continuar carregando mais mensagens automaticamente
-          if (container.scrollTop < 120 && activeConversationId && !isLoadingOlderMessages) {
-            loadOlderMessages(activeConversationId);
-          }
         });
       } else if (!wasScrolledUp || prevCount === 0) {
         scrollToBottom('instant');
@@ -251,25 +388,7 @@ export default function ChatHistory() {
     }
 
     prevMessageCountRef.current = currentCount;
-  }, [messages, activeConversationId, isLoadingOlderMessages, loadOlderMessages]);
-
-  // Continuar carregando automaticamente quando o carregamento terminar e ainda estivermos no topo
-  useEffect(() => {
-    const container = messagesContainerRef.current;
-    // Detecta a transição: estava carregando → terminou de carregar
-    if (wasLoadingOlderRef.current && !isLoadingOlderMessages) {
-      if (container && container.scrollTop < 120 && activeConversationId && canLoadOlder) {
-        // Pequeno delay para deixar o DOM se atualizar com as novas mensagens
-        const timer = setTimeout(() => {
-          if (messagesContainerRef.current && messagesContainerRef.current.scrollTop < 120 && canLoadOlder) {
-            loadOlderMessages(activeConversationId);
-          }
-        }, 150);
-        return () => clearTimeout(timer);
-      }
-    }
-    wasLoadingOlderRef.current = isLoadingOlderMessages;
-  }, [isLoadingOlderMessages, activeConversationId, canLoadOlder, loadOlderMessages]);
+  }, [messages]);
 
   // Scroll to bottom immediately on first load
   useEffect(() => {
@@ -288,8 +407,8 @@ export default function ChatHistory() {
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       isAtBottomRef.current = distanceFromBottom < 80;
 
-      // Trigger loading older messages when near top
-      if (scrollTop < 80 && !isLoadingOlderMessages && activeConversationId && canLoadOlder) {
+      // Só carrega mensagens mais antigas quando o scroll estiver no topo de verdade (≤ 20px)
+      if (scrollTop <= 20 && !isLoadingOlderMessages && activeConversationId && canLoadOlder) {
         loadOlderMessages(activeConversationId);
       }
     };
@@ -652,7 +771,12 @@ export default function ChatHistory() {
                   )}
                 {msg.type === 'AUDIO' ? (
                   <div className="flex flex-col w-[280px]">
-                    <AudioMessagePlayer audioUrl={msg.mediaUrl} isFromMe={msg.isFromMe} />
+                    <AudioMessagePlayer 
+                      msgId={msg.id}
+                      chatId={activeConversationId}
+                      audioUrl={msg.mediaUrl} 
+                      isFromMe={msg.isFromMe} 
+                    />
                     {msg.audioTranscription && (
                       <div className="mt-2 p-2 rounded border bg-white border-stone-200 shadow-sm">
                         <p className="text-[11px] font-bold uppercase tracking-tight mb-1 flex items-center text-stone-700">
@@ -665,26 +789,11 @@ export default function ChatHistory() {
                   </div>
                 ) : isImage ? (
                   <div className="flex flex-col relative group">
-                    <div className="w-[240px] sm:w-[280px] h-[180px] sm:h-[210px] bg-stone-200/50 rounded-lg overflow-hidden flex items-center justify-center relative shadow-sm">
-                      <img 
-                        src={imageUrl} 
-                        alt="Imagem da conversa" 
-                        className="w-full h-full object-cover cursor-pointer"
-                        onClick={() => setSelectedImage(imageUrl)}
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          const parent = e.currentTarget.parentElement;
-                          if (parent) {
-                            const errorPlaceholder = parent.querySelector('.img-error-placeholder') as HTMLElement;
-                            if (errorPlaceholder) errorPlaceholder.style.display = 'flex';
-                          }
-                        }}
-                      />
-                      <div className="img-error-placeholder hidden absolute inset-0 flex-col items-center justify-center text-stone-400 gap-1 bg-stone-100">
-                        <span className="text-xl">📷</span>
-                        <span className="text-[10px] font-medium text-stone-500">Falha ao carregar imagem</span>
-                      </div>
-                    </div>
+                    <ImageMessage
+                      msg={msg}
+                      chatId={activeConversationId}
+                      onOpenFull={(url) => setSelectedImage(url)}
+                    />
                     {hasCaption && (
                       <p className="text-sm mt-1 px-1 pb-3">{msg.content}</p>
                     )}

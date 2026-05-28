@@ -23,6 +23,7 @@ interface AppState {
   loadChats: () => Promise<void>;
   loadMessages: (chatId: string, isPriority?: boolean) => Promise<void>;
   loadOlderMessages: (chatId: string) => Promise<void>;
+  downloadMessageMedia: (chatId: string, messageId: string) => Promise<string | undefined>;
   isLoadingOlderMessages: boolean;
   hasMoreOlderMessages: Record<string, boolean>;
   conversationOffsets: Record<string, number>;
@@ -228,7 +229,7 @@ const getWahaHeaders = (get: any) => {
   return headers;
 };
 
-const getWahaSessionName = (user: any) => {
+export const getWahaSessionName = (user: any) => {
   if (!user) return 'default';
   const name = String(user.name || "user")
     .toLowerCase()
@@ -236,6 +237,47 @@ const getWahaSessionName = (user: any) => {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]/g, "");
   return `${name}-${user.id}`;
+};
+
+const getBase64FromBuffer = (thumbBuffer: any): string | undefined => {
+  if (!thumbBuffer) return undefined;
+  
+  if (typeof thumbBuffer === 'string') {
+    if (thumbBuffer.startsWith('data:image')) return thumbBuffer;
+    return `data:image/jpeg;base64,${thumbBuffer}`;
+  }
+  
+  if (thumbBuffer.type === 'Buffer' && Array.isArray(thumbBuffer.data)) {
+    try {
+      let binary = '';
+      const bytes = thumbBuffer.data;
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return `data:image/jpeg;base64,${btoa(binary)}`;
+    } catch (e) {
+      console.error("Error converting thumbBuffer.data array to base64:", e);
+    }
+  }
+
+  if (thumbBuffer.data && typeof thumbBuffer.data === 'string') {
+    if (thumbBuffer.data.startsWith('data:image')) return thumbBuffer.data;
+    return `data:image/jpeg;base64,${thumbBuffer.data}`;
+  }
+
+  if (Array.isArray(thumbBuffer)) {
+    try {
+      let binary = '';
+      for (let i = 0; i < thumbBuffer.length; i++) {
+        binary += String.fromCharCode(thumbBuffer[i]);
+      }
+      return `data:image/jpeg;base64,${btoa(binary)}`;
+    } catch (e) {
+      console.error("Error converting thumbBuffer array to base64:", e);
+    }
+  }
+  
+  return undefined;
 };
 
 const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionName?: string): Message => {
@@ -351,13 +393,22 @@ const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionNa
         } catch (e) {
           console.error("Failed to parse media URL:", e);
         }
-      } else if (sessionName) {
-        // Fallback for real-time WebSocket events or expired files: dynamic download by message ID
-        mediaUrl = `/api/waha-proxy/api/${sessionName}/messages/${msg.id}/download/file?${wahaUrlParam}${apiKeyParam}${mimeParam}`;
       }
     }
   }
   
+  // Extract low-res thumbnail for progressive image loading
+  let thumbnailBase64: string | undefined;
+  if (hasMediaFile) {
+    const rawMsg = msg._data?.message;
+    if (rawMsg) {
+      const thumbBuffer = rawMsg.imageMessage?.jpegThumbnail || rawMsg.videoMessage?.jpegThumbnail;
+      if (thumbBuffer) {
+        thumbnailBase64 = getBase64FromBuffer(thumbBuffer);
+      }
+    }
+  }
+
   return {
     id: msg.id,
     content: content,
@@ -365,6 +416,7 @@ const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionNa
     isFromMe: msg.fromMe,
     type: msgType,
     mediaUrl: mediaUrl,
+    thumbnailBase64: thumbnailBase64,
     mimeType: msg.media?.mimetype || mime || undefined,
     filename: msg.media?.filename || msg.filename || undefined,
     filesize: msg.media?.filesize || undefined,
@@ -1099,7 +1151,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     try {
       const res = await fetch(
-        `/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30&downloadMedia=true&offset=${currentOffset}`,
+        `/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=50&downloadMedia=false&offset=${currentOffset}`,
         { headers: getWahaHeaders(get) }
       );
       if (!res.ok) throw new Error('Failed to fetch older messages');
@@ -1136,7 +1188,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           },
           hasMoreOlderMessages: {
             ...state.hasMoreOlderMessages,
-            [chatId]: wahaMsgs.length >= 30
+            [chatId]: wahaMsgs.length >= 50
           }
         };
       });
@@ -1145,6 +1197,53 @@ export const useAppStore = create<AppState>((set, get) => ({
     } finally {
       set({ isLoadingOlderMessages: false });
     }
+  },
+
+  downloadMessageMedia: async (chatId: string, messageId: string) => {
+    const user = get().user;
+    if (!user) return undefined;
+    const sessionName = getWahaSessionName(user);
+
+    try {
+      const escapedChatId = encodeURIComponent(chatId);
+      const escapedMessageId = encodeURIComponent(messageId);
+      const res = await fetch(
+        `/api/waha-proxy/api/${sessionName}/chats/${escapedChatId}/messages/${escapedMessageId}?downloadMedia=true`,
+        { headers: getWahaHeaders(get) }
+      );
+      if (!res.ok) throw new Error('Failed to force download message media');
+      
+      const rawMsg = await res.json();
+      const updatedMsg = wahaMsgToMessage(rawMsg, get().wahaUrl, get().wahaApiKey, sessionName);
+      
+      if (updatedMsg.mediaUrl) {
+        set((state) => ({
+          conversations: state.conversations.map(c => {
+            if (c.id === chatId) {
+              return {
+                ...c,
+                messages: c.messages.map(m => 
+                  m.id === messageId 
+                    ? { 
+                        ...m, 
+                        mediaUrl: updatedMsg.mediaUrl, 
+                        mimeType: updatedMsg.mimeType, 
+                        filename: updatedMsg.filename, 
+                        filesize: updatedMsg.filesize 
+                      } 
+                    : m
+                )
+              };
+            }
+            return c;
+          })
+        }));
+        return updatedMsg.mediaUrl;
+      }
+    } catch (err) {
+      console.error(`Failed to download media for message ${messageId}:`, err);
+    }
+    return undefined;
   },
 
   loadMessages: async (chatId, isPriority = false) => {

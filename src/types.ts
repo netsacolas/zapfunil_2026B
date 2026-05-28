@@ -30,6 +30,7 @@ export interface Message {
   type: 'TEXT' | 'AUDIO' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'STICKER';
   audioTranscription?: string;
   mediaUrl?: string;
+  thumbnailBase64?: string;
   mimeType?: string;
   filename?: string;
   filesize?: number;
