@@ -1,5 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { useAppStore } from '../../store/useAppStore';
+
+
+
+
+import { useAppStore, isLikePhoneNumber, formatPhoneNumber } from '../../store/useAppStore';
 import { Search, Filter, X, Loader2, Archive, ArchiveRestore, ArrowLeft } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '../../lib/utils';
@@ -7,18 +11,18 @@ import { cn } from '../../lib/utils';
 import { ChatAvatar } from './ChatAvatar';
 
 export default function ChatList() {
-  const { 
-    conversations, 
-    activeConversationId, 
-    setActiveConversation, 
-    customFields, 
-    wahaSessionStatus, 
-    loadChats, 
-    profilePictures, 
-    fetchProfilePicture, 
-    isLoadingChats, 
-    loadMessages, 
-    archiveConversation, 
+  const {
+    conversations,
+    activeConversationId,
+    setActiveConversation,
+    customFields,
+    wahaSessionStatus,
+    loadChats,
+    profilePictures,
+    fetchProfilePicture,
+    isLoadingChats,
+    loadMessages,
+    archiveConversation,
     unarchiveConversation,
     contactsMap,
     isLoadingMoreChats,
@@ -64,11 +68,11 @@ export default function ChatList() {
 
       // 2. Text Search
       const searchLower = searchTerm.toLowerCase();
-      const matchesSearch = !searchTerm || 
+      const matchesSearch = !searchTerm ||
         conv.contact.name.toLowerCase().includes(searchLower) ||
         conv.contact.phone.includes(searchLower) ||
         conv.messages[conv.messages.length - 1]?.content.toLowerCase().includes(searchLower);
-      
+
       if (!matchesSearch) return false;
 
       // 3. Custom Field Filter
@@ -91,7 +95,7 @@ export default function ChatList() {
       const conversationPhones = new Set(conversations.map(c => c.contact.phone));
       const matchedContacts: typeof conversations = [];
 
-      for (const [key, value] of Object.entries(contactsMap)) {
+      for (const [key, value] of Object.entries(contactsMap || {})) {
         const contactId = key;
         const name = value;
         const phone = contactId.split('@')[0];
@@ -101,13 +105,18 @@ export default function ChatList() {
           continue;
         }
 
-        const matchesSearch = name.toLowerCase().includes(searchTrimmed) || phone.includes(searchTrimmed);
+        const matchesSearch = (name || '').toLowerCase().includes(searchTrimmed) || phone.includes(searchTrimmed);
         if (matchesSearch) {
+          let resolvedName = name;
+          if (resolvedName && isLikePhoneNumber(resolvedName)) {
+            resolvedName = formatPhoneNumber(resolvedName);
+          }
+
           matchedContacts.push({
             id: contactId,
             contact: {
               id: contactId,
-              name: name,
+              name: resolvedName,
               phone: phone,
               status: 'Lead',
             },
@@ -152,7 +161,7 @@ export default function ChatList() {
           <h1 className="text-xl font-bold">Conversas</h1>
           <div className="flex space-x-2 items-center">
             <span className="px-2 py-1 bg-orange-100 text-orange-700 text-[10px] font-bold rounded uppercase tracking-wider border border-orange-200">Conectado</span>
-            <button 
+            <button
               onClick={() => setShowFilters(!showFilters)}
               className={cn("p-1.5 rounded-lg transition-colors border", showFilters || selectedFilterField ? "bg-stone-800 text-white border-stone-800" : "bg-stone-100 text-stone-500 border-stone-200 hover:bg-stone-200")}
             >
@@ -162,82 +171,82 @@ export default function ChatList() {
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-2.5 text-stone-400" size={16} />
-          <input 
-            type="text" 
-            placeholder="Pesquisar conversa..." 
+          <input
+            type="text"
+            placeholder="Pesquisar conversa..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
             className="w-full bg-stone-100 border-none rounded-lg py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-orange-500 text-stone-800"
           />
         </div>
-        
+
         {/* Dynamic Filters UI */}
         {showFilters && (
           <div className="absolute top-[100%] left-0 right-0 bg-white border-b border-stone-100 p-4 shadow-xl shadow-stone-200/50 flex flex-col gap-3">
             <div>
-               <label className="text-xs font-bold text-stone-500 uppercase">Filtrar por campo</label>
-               <select 
-                 className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
-                 value={selectedFilterField}
-                 onChange={(e) => {
-                   setSelectedFilterField(e.target.value);
-                   setSelectedFilterValue(''); // reset value on field change
-                 }}
-               >
-                 <option value="">Nenhum filtro...</option>
-                 <option value="status">Status do Lead</option>
-                 {customFields.map(cf => (
-                   <option key={cf.id} value={cf.id}>{cf.name}</option>
-                 ))}
-               </select>
+              <label className="text-xs font-bold text-stone-500 uppercase">Filtrar por campo</label>
+              <select
+                className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
+                value={selectedFilterField}
+                onChange={(e) => {
+                  setSelectedFilterField(e.target.value);
+                  setSelectedFilterValue(''); // reset value on field change
+                }}
+              >
+                <option value="">Nenhum filtro...</option>
+                <option value="status">Status do Lead</option>
+                {customFields.map(cf => (
+                  <option key={cf.id} value={cf.id}>{cf.name}</option>
+                ))}
+              </select>
             </div>
-            
+
             {selectedFilterField && (
-               <div>
-                 <label className="text-xs font-bold text-stone-500 uppercase">Valor</label>
-                 {selectedFilterField === 'status' ? (
-                   <select 
-                     className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
-                     value={selectedFilterValue}
-                     onChange={(e) => setSelectedFilterValue(e.target.value)}
-                   >
-                     <option value="">Selecionar status...</option>
-                     <option value="Lead">Lead</option>
-                     <option value="Frio">Frio</option>
-                     <option value="Morno">Morno</option>
-                     <option value="Quente">Quente</option>
-                     <option value="Fechado">Fechado</option>
-                   </select>
-                 ) : activeCustomFieldDefinition?.type === 'select' ? (
-                   <select 
-                     className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
-                     value={selectedFilterValue}
-                     onChange={(e) => setSelectedFilterValue(e.target.value)}
-                   >
-                     <option value="">Qualquer opção...</option>
-                     {activeCustomFieldDefinition.options?.map(o => (
-                       <option key={o} value={o}>{o}</option>
-                     ))}
-                   </select>
-                 ) : (
-                    <input 
-                      type="text" 
-                      className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
-                      placeholder="Valor exato..."
-                      value={selectedFilterValue}
-                      onChange={(e) => setSelectedFilterValue(e.target.value)}
-                    />
-                 )}
-               </div>
+              <div>
+                <label className="text-xs font-bold text-stone-500 uppercase">Valor</label>
+                {selectedFilterField === 'status' ? (
+                  <select
+                    className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
+                    value={selectedFilterValue}
+                    onChange={(e) => setSelectedFilterValue(e.target.value)}
+                  >
+                    <option value="">Selecionar status...</option>
+                    <option value="Lead">Lead</option>
+                    <option value="Frio">Frio</option>
+                    <option value="Morno">Morno</option>
+                    <option value="Quente">Quente</option>
+                    <option value="Fechado">Fechado</option>
+                  </select>
+                ) : activeCustomFieldDefinition?.type === 'select' ? (
+                  <select
+                    className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
+                    value={selectedFilterValue}
+                    onChange={(e) => setSelectedFilterValue(e.target.value)}
+                  >
+                    <option value="">Qualquer opção...</option>
+                    {activeCustomFieldDefinition.options?.map(o => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    className="mt-1 w-full text-sm bg-stone-50 border border-stone-200 rounded-md py-1.5 px-2 outline-none focus:ring-1 focus:ring-orange-500"
+                    placeholder="Valor exato..."
+                    value={selectedFilterValue}
+                    onChange={(e) => setSelectedFilterValue(e.target.value)}
+                  />
+                )}
+              </div>
             )}
-            
+
             {selectedFilterField && (
-               <button 
-                 onClick={() => { setSelectedFilterField(''); setSelectedFilterValue(''); }}
-                 className="self-end text-xs text-red-500 font-medium flex items-center hover:bg-red-50 px-2 py-1 rounded"
-               >
-                 <X size={12} className="mr-1" /> Limpar filtros
-               </button>
+              <button
+                onClick={() => { setSelectedFilterField(''); setSelectedFilterValue(''); }}
+                className="self-end text-xs text-red-500 font-medium flex items-center hover:bg-red-50 px-2 py-1 rounded"
+              >
+                <X size={12} className="mr-1" /> Limpar filtros
+              </button>
             )}
           </div>
         )}
@@ -250,13 +259,13 @@ export default function ChatList() {
           <span className="text-sm font-medium">Carregando conversas...</span>
         </div>
       ) : (
-        <div 
+        <div
           onScroll={handleScroll}
           className="flex-1 overflow-y-auto border-t border-stone-100 flex flex-col"
         >
           {/* Aba de arquivados no topo da lista se houver arquivadas */}
           {viewMode === 'active' && archivedCount > 0 && (
-            <button 
+            <button
               onClick={() => setViewMode('archived')}
               className="w-full flex items-center justify-between p-4 border-b border-stone-100 hover:bg-stone-50 transition text-stone-600 font-semibold text-sm cursor-pointer"
             >
@@ -272,7 +281,7 @@ export default function ChatList() {
 
           {/* Botão de voltar ao visualizar arquivadas */}
           {viewMode === 'archived' && (
-            <button 
+            <button
               onClick={() => setViewMode('active')}
               className="w-full flex items-center gap-3 p-4 border-b border-stone-100 bg-stone-50 hover:bg-stone-100 transition text-stone-700 font-bold text-sm cursor-pointer"
             >
@@ -291,7 +300,7 @@ export default function ChatList() {
               const isActive = conv.id === activeConversationId;
               const lastMsg = conv.messages[conv.messages.length - 1];
               return (
-                <div 
+                <div
                   key={conv.id}
                   onClick={() => {
                     if (hoverTimeoutRef.current[conv.id]) {

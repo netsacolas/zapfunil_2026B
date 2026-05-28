@@ -1,10 +1,20 @@
 import React from 'react';
-import { useAppStore } from '../../store/useAppStore';
+import { useAppStore, formatPhoneNumber } from '../../store/useAppStore';
 import { Briefcase, MapPin, Tag, Edit3, X, AlignLeft, KanbanSquare } from 'lucide-react';
 import { ChatAvatar } from './ChatAvatar';
 
 export default function CrmPanel() {
-  const { conversations, activeConversationId, setActiveConversation, customFields, updateContactCustomField, addToKanban, removeFromKanban, setCustomAvatar } = useAppStore();
+  const { 
+    conversations, 
+    activeConversationId, 
+    setActiveConversation, 
+    customFields, 
+    updateContactCustomField, 
+    addToKanban, 
+    removeFromKanban, 
+    setCustomAvatar,
+    updateContactName
+  } = useAppStore();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   
   const handleAvatarClick = () => {
@@ -25,6 +35,32 @@ export default function CrmPanel() {
 
   if (!conversation) return null;
   const { contact } = conversation;
+
+  const [isEditingName, setIsEditingName] = React.useState(false);
+  const [tempName, setTempName] = React.useState(contact.name || '');
+  const [isSavingName, setIsSavingName] = React.useState(false);
+
+  React.useEffect(() => {
+    setTempName(contact.name || '');
+  }, [contact.id, contact.name]);
+
+  const handleSaveName = async () => {
+    if (!tempName.trim()) return;
+    setIsSavingName(true);
+    try {
+      const success = await updateContactName(contact.id, tempName);
+      if (success) {
+        setIsEditingName(false);
+      } else {
+        alert("Falha ao salvar contato no WhatsApp. Por favor, verifique a conexão com o WAHA.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Erro ao salvar contato.");
+    } finally {
+      setIsSavingName(false);
+    }
+  };
   
   const isInKanban = !!contact.funnelStageId;
 
@@ -51,17 +87,65 @@ export default function CrmPanel() {
             className="hidden" 
           />
         </div>
-        <h3 className="text-sm font-bold text-stone-900">{contact.name}</h3>
-        <p className="text-xs text-stone-500 mt-1">{contact.phone}</p>
         
-        <div className="w-full mt-4 flex gap-2">
-            <button className="flex-1 bg-stone-50 border border-stone-200 text-stone-700 py-1.5 rounded-md font-medium text-xs flex items-center justify-center gap-1 hover:bg-stone-100 transition">
+        {isEditingName ? (
+          <div className="flex items-center gap-2 mt-1 w-full max-w-[200px]">
+            <input
+              type="text"
+              value={tempName}
+              onChange={(e) => setTempName(e.target.value)}
+              className="flex-1 px-2 py-1 text-xs border border-orange-300 rounded-md focus:outline-none focus:ring-1 focus:ring-orange-500 font-medium text-stone-900 text-center"
+              placeholder="Nome do contato"
+              autoFocus
+              disabled={isSavingName}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSaveName();
+                if (e.key === 'Escape') {
+                  setIsEditingName(false);
+                  setTempName(contact.name || '');
+                }
+              }}
+            />
+          </div>
+        ) : (
+          <h3 className="text-sm font-bold text-stone-900">{contact.name}</h3>
+        )}
+        
+        <p className="text-xs text-stone-500 mt-1">{formatPhoneNumber(contact.phone)}</p>
+        
+        {isEditingName ? (
+          <div className="w-full mt-4 flex gap-2">
+            <button 
+              onClick={handleSaveName}
+              disabled={isSavingName || !tempName.trim()}
+              className="flex-1 bg-orange-500 text-white py-1.5 rounded-md font-medium text-xs flex items-center justify-center gap-1 hover:bg-orange-600 transition disabled:opacity-50"
+            >
+              {isSavingName ? 'Salvando...' : 'Salvar'}
+            </button>
+            <button 
+              onClick={() => {
+                setIsEditingName(false);
+                setTempName(contact.name || '');
+              }}
+              disabled={isSavingName}
+              className="flex-1 bg-stone-100 text-stone-600 border border-stone-200 py-1.5 rounded-md font-medium text-xs hover:bg-stone-200 transition"
+            >
+              Cancelar
+            </button>
+          </div>
+        ) : (
+          <div className="w-full mt-4 flex gap-2">
+            <button 
+              onClick={() => setIsEditingName(true)}
+              className="flex-1 bg-stone-50 border border-stone-200 text-stone-700 py-1.5 rounded-md font-medium text-xs flex items-center justify-center gap-1 hover:bg-stone-100 transition"
+            >
               <Edit3 size={14} /> Editar
             </button>
             <button className="flex-1 bg-orange-50 text-orange-700 border border-orange-200 py-1.5 rounded-md font-medium text-xs hover:bg-orange-100 transition">
               Ver Histórico
             </button>
-        </div>
+          </div>
+        )}
       </div>
 
       <div className="p-4 flex-1 overflow-y-auto space-y-4">

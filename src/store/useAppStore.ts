@@ -52,6 +52,7 @@ interface AppState {
   removeScheduledMessage: (id: string) => void;
   addTemplate: (tpl: Omit<MessageTemplate, 'id'>) => void;
   removeTemplate: (id: string) => void;
+  updateContactName: (contactId: string, newName: string) => Promise<boolean>;
 
   archiveConversation: (id: string) => Promise<void>;
   unarchiveConversation: (id: string) => Promise<void>;
@@ -187,6 +188,28 @@ const stopPolling = () => {
   }
 };
 
+export const isLikePhoneNumber = (name: any): boolean => {
+  if (!name || typeof name !== 'string') return false;
+  if (name.includes('@s.whatsapp.net') || name.includes('@c.us')) return true;
+  const cleaned = name.replace(/[\s\-\(\)\+]/g, '');
+  return /^\d{8,15}$/.test(cleaned);
+};
+
+export const formatPhoneNumber = (phone: any): string => {
+  if (!phone || typeof phone !== 'string') return '';
+  let cleaned = phone.split('@')[0];
+  cleaned = cleaned.replace(/\D/g, '');
+  if (cleaned.startsWith('55') && (cleaned.length === 12 || cleaned.length === 13)) {
+    cleaned = cleaned.substring(2);
+  }
+  if (cleaned.length === 11) {
+    return `${cleaned.substring(0, 2)} ${cleaned.substring(2, 7)}-${cleaned.substring(7)}`;
+  } else if (cleaned.length === 10) {
+    return `${cleaned.substring(0, 2)} ${cleaned.substring(2, 6)}-${cleaned.substring(6)}`;
+  }
+  return phone;
+};
+
 const getWahaHeaders = (get: any) => {
   const headers: HeadersInit = { 
     'Content-Type': 'application/json',
@@ -216,7 +239,10 @@ const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionNa
   
   // Extract sender details
   const senderId = msg.participant || msg.from || '';
-  const senderName = msg._data?.pushName || msg.pushName || '';
+  let senderName = msg._data?.pushName || msg.pushName || '';
+  if (senderName && isLikePhoneNumber(senderName)) {
+    senderName = formatPhoneNumber(senderName);
+  }
   
   // 1. Classification based on WAHA message type
   const wahaType = (msg.type || '').toLowerCase();
@@ -456,7 +482,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   contactsMap: (() => {
     try {
       const cached = localStorage.getItem('waha_contacts_map');
-      return cached ? JSON.parse(cached) : {};
+      const parsed = cached ? JSON.parse(cached) : null;
+      return parsed && typeof parsed === 'object' ? parsed : {};
     } catch (e) {
       return {};
     }
@@ -563,7 +590,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     try {
       // Fetch chats overview (which includes recent chat list and the last message details in a single query)
-      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/overview?limit=40`, {
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/overview?limit=25`, {
         headers: getWahaHeaders(get)
       });
 
@@ -590,11 +617,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           // Resolve contact name from overview or cache
           let name = c.name;
-          if (!name) {
-            name = contactsMap[chatId] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || phone;
+          if (!name || isLikePhoneNumber(name)) {
+            name = contactsMap[chatId] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || name || phone;
           }
           if (name && name.startsWith('*\n')) {
             name = name.replace('*\n', '');
+          }
+          // Format phone number if the name is just a raw number JID/phone
+          if (name && isLikePhoneNumber(name)) {
+            name = formatPhoneNumber(name);
           }
 
           // Process last message if it exists
@@ -667,7 +698,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ 
         conversations: mappedConversations,
-        hasMoreChats: overviewData.length === 40
+        hasMoreChats: overviewData.length === 25
       });
 
       // Pre-fetch messages for top 5 chats in background (lazy load)
@@ -734,11 +765,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           // Resolve contact name from overview or cache
           let name = c.name;
-          if (!name) {
-            name = contactsMap[chatId] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || phone;
+          if (!name || isLikePhoneNumber(name)) {
+            name = contactsMap[chatId] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || name || phone;
           }
           if (name && name.startsWith('*\n')) {
             name = name.replace('*\n', '');
+          }
+          // Format phone number if the name is just a raw number JID/phone
+          if (name && isLikePhoneNumber(name)) {
+            name = formatPhoneNumber(name);
           }
 
           // Process last message if it exists
@@ -840,7 +875,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const contactsData = await contactsRes.json();
         
         // Chunk processing to avoid blocking UI main thread
-        const contactsMap: Record<string, string> = {};
+        const contactsMap: Record<string, string> = { ...get().contactsMap };
         const chunkSize = 500;
         let index = 0;
 
@@ -849,7 +884,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           for (let i = index; i < end; i++) {
             const c = contactsData[i];
             const nameVal = c.verifiedName || c.name;
-            if (nameVal) {
+            if (nameVal && !isLikePhoneNumber(nameVal)) {
               if (c.id) contactsMap[c.id] = nameVal;
               if (c.phoneNumber) contactsMap[c.phoneNumber] = nameVal;
             }
@@ -872,7 +907,10 @@ export const useAppStore = create<AppState>((set, get) => ({
             set((state) => ({
               conversations: state.conversations.map(c => {
                 const phone = c.id.split('@')[0];
-                const name = contactsMap[c.id] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || c.contact.name;
+                let name = contactsMap[c.id] || contactsMap[phone + '@s.whatsapp.net'] || contactsMap[phone + '@c.us'] || c.contact.name;
+                if (name && isLikePhoneNumber(name)) {
+                  name = formatPhoneNumber(name);
+                }
                 return {
                   ...c,
                   contact: { ...c.contact, name }
@@ -894,6 +932,58 @@ export const useAppStore = create<AppState>((set, get) => ({
   syncContacts: async () => {
     set({ isContactsLoaded: false });
     await get().loadContacts();
+  },
+  updateContactName: async (contactId, newName) => {
+    const user = get().user;
+    if (!user) return false;
+    const sessionName = getWahaSessionName(user);
+
+    const parts = newName.trim().split(/\s+/);
+    const firstName = parts[0] || '';
+    const lastName = parts.slice(1).join(' ') || '';
+
+    try {
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/contacts/${contactId}`, {
+        method: 'PUT',
+        headers: getWahaHeaders(get),
+        body: JSON.stringify({ firstName, lastName })
+      });
+
+      if (res.ok) {
+        // Update in conversations list
+        set((state) => ({
+          conversations: state.conversations.map(c => {
+            if (c.contact.id === contactId || c.id === contactId) {
+              return {
+                ...c,
+                contact: { ...c.contact, name: newName }
+              };
+            }
+            return c;
+          })
+        }));
+
+        // Update in contactsMap cache
+        set((state) => {
+          const updatedContactsMap = { ...state.contactsMap };
+          updatedContactsMap[contactId] = newName;
+          
+          try {
+            localStorage.setItem('waha_contacts_map', JSON.stringify(updatedContactsMap));
+          } catch (e) {
+            console.error("[Storage] Failed to save updated contacts map to localStorage:", e);
+          }
+          
+          return { contactsMap: updatedContactsMap };
+        });
+
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("Failed to update contact name on WhatsApp:", err);
+      return false;
+    }
   },
   loadMessages: async (chatId, isPriority = false) => {
     const user = get().user;
