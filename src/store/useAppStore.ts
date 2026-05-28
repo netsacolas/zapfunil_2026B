@@ -29,12 +29,14 @@ interface AppState {
   contactsMap: Record<string, string>;
   isContactsLoaded: boolean;
   isSyncingContacts: boolean;
+  isContactsSyncedThisSession: boolean;
   loadContacts: () => Promise<void>;
   syncContacts: () => Promise<void>;
   isLoadingChats: boolean;
   isLoadingMoreChats: boolean;
   hasMoreChats: boolean;
   isChatsInitialLoaded: boolean;
+  chatsOffset: number;
   loadingChatId: string | null;
   loadMoreChats: () => Promise<void>;
   profilePicsQueue: string[];
@@ -438,9 +440,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       isAuthenticated: false, 
       wahaSessionStatus: 'DISCONNECTED', 
       wahaQrCode: null,
+      conversations: [],
       contactsMap: {},
       isContactsLoaded: false,
       isSyncingContacts: false,
+      isContactsSyncedThisSession: false,
+      chatsOffset: 0,
       profilePictures: {},
       profilePicsQueue: [],
       isProcessingQueue: false
@@ -496,10 +501,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   })(),
   isSyncingContacts: false,
+  isContactsSyncedThisSession: false,
   isLoadingChats: false,
   isLoadingMoreChats: false,
   hasMoreChats: true,
   isChatsInitialLoaded: false,
+  chatsOffset: 0,
   loadingChatId: null,
   profilePicsQueue: [],
   isProcessingQueue: false,
@@ -589,12 +596,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     try {
-      // Fetch chats overview (which includes recent chat list and the last message details in a single query)
-      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/overview?limit=25`, {
+      // Fetch chats overview (using limit of 50 to ensure a scrollbar renders on all resolutions)
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/overview?limit=50`, {
         headers: getWahaHeaders(get)
       });
 
-      if (!res.ok) throw new Error("Failed to fetch chats overview");
+      if (!res.ok) throw new Error("Failed to fetch chats overview: " + res.status);
       const overviewData = await res.json();
 
       const contactsMap = get().contactsMap;
@@ -670,7 +677,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           const lastActivity = lastMsg
             ? new Date(lastMsg.timestamp).getTime()
-            : (c.conversationTimestamp ? c.conversationTimestamp * 1000 : 0);
+            : ((c._chat?.conversationTimestamp || c.conversationTimestamp || 0) * 1000);
 
           // Get archive status (supported by WAHA engine DTOs)
           const isArchived = c.archive || c.archived || c._chat?.archive || c._chat?.archived || false;
@@ -696,9 +703,32 @@ export const useAppStore = create<AppState>((set, get) => ({
         saveProfilePictures(profilePictures);
       }
 
-      set({ 
-        conversations: mappedConversations,
-        hasMoreChats: overviewData.length === 25
+      set((state) => {
+        const mergedMap = new Map<string, Conversation>();
+        const isCleanLoad = state.conversations.length <= 50 || !state.isChatsInitialLoaded;
+        if (!isCleanLoad) {
+          state.conversations.forEach(c => mergedMap.set(c.id, c));
+        }
+        
+        mappedConversations.forEach(c => {
+          mergedMap.set(c.id, c);
+        });
+
+        const mergedList = Array.from(mergedMap.values());
+        
+        mergedList.sort((a, b) => {
+          const timeA = a.lastActivity || 0;
+          const timeB = b.lastActivity || 0;
+          return timeB - timeA;
+        });
+
+        return {
+          conversations: mergedList,
+          ...(isCleanLoad ? {
+            hasMoreChats: overviewData.length === 50,
+            chatsOffset: overviewData.length
+          } : {})
+        };
       });
 
       // Pre-fetch messages for top 5 chats in background (lazy load)
@@ -709,13 +739,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
-      // Non-blocking trigger: load contacts in background after 15 seconds to avoid initial overload
-      if (!get().isContactsLoaded && !get().isSyncingContacts) {
+      // Non-blocking trigger: sync contacts in background once per session on startup to refresh cache
+      if (get().wahaSessionStatus === 'CONNECTED' && !get().isContactsSyncedThisSession && !get().isSyncingContacts) {
+        set({ isContactsSyncedThisSession: true });
         setTimeout(() => {
-          if (!get().isContactsLoaded && !get().isSyncingContacts && get().wahaSessionStatus === 'CONNECTED') {
+          if (get().wahaSessionStatus === 'CONNECTED') {
             get().loadContacts();
           }
-        }, 15000);
+        }, 3000);
       }
     } catch (err) {
       console.error("Failed to load WAHA chats overview:", err);
@@ -724,6 +755,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   loadMoreChats: async () => {
+    console.log("[WAHA loadMoreChats] Triggered. hasMoreChats:", get().hasMoreChats, "isLoadingMoreChats:", get().isLoadingMoreChats);
     if (get().isLoadingMoreChats || !get().hasMoreChats) return;
     const user = get().user;
     if (!user) return;
@@ -732,15 +764,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ isLoadingMoreChats: true });
 
     try {
-      const currentCount = get().conversations.length;
-      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/overview?limit=25&offset=${currentCount}`, {
+      const currentOffset = get().chatsOffset;
+      const url = `/api/waha-proxy/api/${sessionName}/chats/overview?limit=50&offset=${currentOffset}`;
+      console.log("[WAHA loadMoreChats] Fetching from URL:", url);
+      const res = await fetch(url, {
         headers: getWahaHeaders(get)
       });
 
-      if (!res.ok) throw new Error("Failed to fetch more chats overview");
+      if (!res.ok) throw new Error("Failed to fetch more chats overview: " + res.status);
       const overviewData = await res.json();
+      console.log("[WAHA loadMoreChats] Received:", overviewData.length, "chats");
 
       if (overviewData.length === 0) {
+        console.log("[WAHA loadMoreChats] No more chats. Setting hasMoreChats to false.");
         set({ hasMoreChats: false });
         return;
       }
@@ -804,7 +840,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           const lastActivity = lastMsg
             ? new Date(lastMsg.timestamp).getTime()
-            : (c.conversationTimestamp ? c.conversationTimestamp * 1000 : 0);
+            : ((c._chat?.conversationTimestamp || c.conversationTimestamp || 0) * 1000);
 
           const isArchived = c.archive || c.archived || c._chat?.archive || c._chat?.archived || false;
 
@@ -850,7 +886,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         return {
           conversations: mergedList,
-          hasMoreChats: overviewData.length === 25
+          hasMoreChats: overviewData.length === 50,
+          chatsOffset: state.chatsOffset + overviewData.length
         };
       });
     } catch (err) {
@@ -922,11 +959,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         processChunk();
       } else {
-        set({ isSyncingContacts: false });
+        set({ isSyncingContacts: false, isContactsSyncedThisSession: false });
       }
     } catch (err) {
       console.error("Failed to load contacts:", err);
-      set({ isSyncingContacts: false });
+      set({ isSyncingContacts: false, isContactsSyncedThisSession: false });
     }
   },
   syncContacts: async () => {
@@ -1740,7 +1777,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       try { wahaSocket.close(); } catch (e) {}
       wahaSocket = null;
     }
-    set({ wahaSessionStatus: 'STARTING' }); // Show state change
+    set({ wahaSessionStatus: 'STARTING', isContactsSyncedThisSession: false }); // Show state change and reset sync flag
     try {
       await fetch(`/api/waha-proxy/api/sessions/${sessionName}`, {
         method: 'DELETE',
@@ -1780,6 +1817,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     ws.onopen = () => {
       console.log("[WAHA WebSocket] Connected successfully.");
+      // Refresh chats and messages on connection open to sync any missed events
+      get().loadChats();
+      const activeId = get().activeConversationId;
+      if (activeId) {
+        get().loadMessages(activeId, true);
+      }
     };
 
     ws.onmessage = (event) => {

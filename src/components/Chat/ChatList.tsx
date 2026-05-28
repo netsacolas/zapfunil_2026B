@@ -44,7 +44,14 @@ export default function ChatList() {
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 100) {
+    const isAtBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 100;
+    if (isAtBottom) {
+      console.log("[ChatList Scroll] Near bottom. States:", {
+        isLoadingMoreChats,
+        hasMoreChats,
+        wahaSessionStatus,
+        conversationsCount: conversations.length
+      });
       if (!isLoadingMoreChats && hasMoreChats && wahaSessionStatus === 'CONNECTED') {
         loadMoreChats();
       }
@@ -160,7 +167,15 @@ export default function ChatList() {
         <div className="flex justify-between items-center">
           <h1 className="text-xl font-bold">Conversas</h1>
           <div className="flex space-x-2 items-center">
-            <span className="px-2 py-1 bg-orange-100 text-orange-700 text-[10px] font-bold rounded uppercase tracking-wider border border-orange-200">Conectado</span>
+            {wahaSessionStatus === 'CONNECTED' ? (
+              <span className="px-2 py-1 bg-green-50 text-green-700 text-[10px] font-bold rounded uppercase tracking-wider border border-green-200">Conectado</span>
+            ) : wahaSessionStatus === 'STARTING' ? (
+              <span className="px-2 py-1 bg-blue-50 text-blue-700 text-[10px] font-bold rounded uppercase tracking-wider border border-blue-200 animate-pulse">Conectando...</span>
+            ) : wahaSessionStatus === 'SCAN_QR_CODE' ? (
+              <span className="px-2 py-1 bg-amber-50 text-amber-700 text-[10px] font-bold rounded uppercase tracking-wider border border-amber-200">QR Code</span>
+            ) : (
+              <span className="px-2 py-1 bg-stone-100 text-stone-600 text-[10px] font-bold rounded uppercase tracking-wider border border-stone-200">Desconectado</span>
+            )}
             <button
               onClick={() => setShowFilters(!showFilters)}
               className={cn("p-1.5 rounded-lg transition-colors border", showFilters || selectedFilterField ? "bg-stone-800 text-white border-stone-800" : "bg-stone-100 text-stone-500 border-stone-200 hover:bg-stone-200")}
