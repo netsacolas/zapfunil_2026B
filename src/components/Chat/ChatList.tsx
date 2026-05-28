@@ -5,12 +5,28 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 
 import { useAppStore, isLikePhoneNumber, formatPhoneNumber } from '../../store/useAppStore';
 import { Search, Filter, X, Loader2, Archive, ArchiveRestore, ArrowLeft } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, isToday, isYesterday } from 'date-fns';
 import { cn } from '../../lib/utils';
 
 import { ChatAvatar } from './ChatAvatar';
 
 export default function ChatList() {
+  const formatLastMessageTimestamp = (timestamp: string | number) => {
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) return '';
+      if (isToday(date)) {
+        return format(date, 'HH:mm');
+      }
+      if (isYesterday(date)) {
+        return 'Ontem';
+      }
+      return format(date, 'dd/MM/yyyy');
+    } catch (e) {
+      return '';
+    }
+  };
+
   const {
     conversations,
     activeConversationId,
@@ -352,12 +368,12 @@ export default function ChatList() {
                   <div className="flex-1 min-w-0 flex flex-col justify-center">
                     <div className="flex justify-between items-baseline mb-1">
                       <h3 className="font-semibold text-stone-900 truncate pr-2">{conv.contact.name}</h3>
-                      {lastMsg && (
+                      {conv.lastActivity > 0 && (
                         <span className={cn(
                           "text-[10px] flex-shrink-0 whitespace-nowrap",
-                          isActive ? "text-orange-600 font-bold uppercase tracking-wider" : "text-stone-400"
+                          isActive ? "text-orange-600 font-bold" : "text-stone-400"
                         )}>
-                          {isActive ? 'AGORA' : format(new Date(lastMsg.timestamp), 'HH:mm')}
+                          {formatLastMessageTimestamp(conv.lastActivity)}
                         </span>
                       )}
                     </div>

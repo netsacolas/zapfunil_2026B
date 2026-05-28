@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { MoreVertical, Paperclip, Smile, Mic, Send, Bot, CalendarClock, X, Loader2, Play, Pause, Archive, ArchiveRestore, Trash2, Check } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, isToday, isYesterday } from 'date-fns';
 import { cn } from '../../lib/utils';
 import { io } from "socket.io-client";
 
@@ -425,75 +425,93 @@ export default function ChatHistory() {
 
       {/* Messages */}
       <div className="flex-1 p-6 space-y-4 flex flex-col overflow-y-auto">
-        <div className="self-center py-1 px-3 bg-white/70 rounded-lg text-[11px] text-stone-500 uppercase tracking-widest shadow-sm">Hoje</div>
         {messages.map((msg, idx) => {
+          const msgDate = new Date(msg.timestamp);
+          const prevMsg = idx > 0 ? messages[idx - 1] : null;
+          const prevMsgDate = prevMsg ? new Date(prevMsg.timestamp) : null;
+          
+          const isDifferentDay = !prevMsgDate || 
+            msgDate.getDate() !== prevMsgDate.getDate() ||
+            msgDate.getMonth() !== prevMsgDate.getMonth() ||
+            msgDate.getFullYear() !== prevMsgDate.getFullYear();
+
           const isImage = msg.type === 'IMAGE';
           const imageUrl = msg.mediaUrl || msg.content;
           const hasCaption = msg.content && msg.content !== imageUrl;
 
           return (
-            <div 
-              key={msg.id} 
-              className={cn(
-                "flex items-end gap-2 max-w-[85%] sm:max-w-md", 
-                msg.isFromMe ? "self-end justify-end" : "self-start justify-start"
+            <React.Fragment key={msg.id}>
+              {isDifferentDay && (
+                <div className="self-center py-1 px-3 bg-white/70 rounded-lg text-[11px] text-stone-500 uppercase tracking-widest shadow-sm my-2">
+                  {isToday(msgDate)
+                    ? 'Hoje'
+                    : isYesterday(msgDate)
+                    ? 'Ontem'
+                    : format(msgDate, 'dd/MM/yyyy')}
+                </div>
               )}
-            >
-              {!msg.isFromMe && (
-                <ChatAvatar 
-                  chatId={msg.senderId || conversation.id} 
-                  name={msg.senderName || conversation.contact.name} 
-                  size="xs" 
-                  autoFetch={true}
-                />
-              )}
-              <div className={cn(
-                "relative shadow-sm border text-stone-900", 
-                isImage ? "p-1" : "p-3",
-                msg.isFromMe ? "bg-[#d9fdd3] border-[#d9fdd3] rounded-tl-xl rounded-b-xl" : "bg-white border-white rounded-tr-xl rounded-b-xl"
-              )}>
-                {!msg.isFromMe && msg.senderName && (
-                  <p className="text-[10px] font-bold text-orange-600 mb-1">{msg.senderName}</p>
+              <div 
+                className={cn(
+                  "flex items-end gap-2 max-w-[85%] sm:max-w-md", 
+                  msg.isFromMe ? "self-end justify-end" : "self-start justify-start"
                 )}
-              {msg.type === 'AUDIO' ? (
-                <div className="flex flex-col w-[260px]">
-                  <AudioMessagePlayer audioUrl={msg.mediaUrl} isFromMe={msg.isFromMe} />
-                  {msg.audioTranscription && (
-                    <div className="mt-2 p-2 rounded border bg-white border-stone-200 shadow-sm">
-                      <p className="text-[11px] font-bold uppercase tracking-tight mb-1 flex items-center text-stone-700">
-                        <Bot size={12} className="mr-1" />
-                        Transcrição IA
-                      </p>
-                      <p className="text-[12px] italic leading-tight text-stone-700">"{msg.audioTranscription}"</p>
-                    </div>
-                  )}
-                </div>
-              ) : isImage ? (
-                <div className="flex flex-col relative group">
-                  <img 
-                    src={imageUrl} 
-                    alt="Imagem da conversa" 
-                    className="max-w-full sm:max-w-[320px] rounded-lg cursor-pointer object-cover shadow-sm"
-                    style={{ maxHeight: '320px' }}
-                    onClick={() => setSelectedImage(imageUrl)}
+              >
+                {!msg.isFromMe && (
+                  <ChatAvatar 
+                    chatId={msg.senderId || conversation.id} 
+                    name={msg.senderName || conversation.contact.name} 
+                    size="xs" 
+                    autoFetch={true}
                   />
-                  {hasCaption && (
-                    <p className="text-sm mt-1 px-1 pb-3">{msg.content}</p>
+                )}
+                <div className={cn(
+                  "relative shadow-sm border text-stone-900", 
+                  isImage ? "p-1" : "p-3",
+                  msg.isFromMe ? "bg-[#d9fdd3] border-[#d9fdd3] rounded-tl-xl rounded-b-xl" : "bg-white border-white rounded-tr-xl rounded-b-xl"
+                )}>
+                  {!msg.isFromMe && msg.senderName && (
+                    <p className="text-[10px] font-bold text-orange-600 mb-1">{msg.senderName}</p>
                   )}
+                {msg.type === 'AUDIO' ? (
+                  <div className="flex flex-col w-[260px]">
+                    <AudioMessagePlayer audioUrl={msg.mediaUrl} isFromMe={msg.isFromMe} />
+                    {msg.audioTranscription && (
+                      <div className="mt-2 p-2 rounded border bg-white border-stone-200 shadow-sm">
+                        <p className="text-[11px] font-bold uppercase tracking-tight mb-1 flex items-center text-stone-700">
+                          <Bot size={12} className="mr-1" />
+                          Transcrição IA
+                        </p>
+                        <p className="text-[12px] italic leading-tight text-stone-700">"{msg.audioTranscription}"</p>
+                      </div>
+                    )}
+                  </div>
+                ) : isImage ? (
+                  <div className="flex flex-col relative group">
+                    <img 
+                      src={imageUrl} 
+                      alt="Imagem da conversa" 
+                      className="max-w-full sm:max-w-[320px] rounded-lg cursor-pointer object-cover shadow-sm"
+                      style={{ maxHeight: '320px' }}
+                      onClick={() => setSelectedImage(imageUrl)}
+                    />
+                    {hasCaption && (
+                      <p className="text-sm mt-1 px-1 pb-3">{msg.content}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm">{msg.content}</p>
+                )}
+                
+                <div className={cn(
+                  "text-[10.5px] font-medium flex items-center gap-1", 
+                  isImage && !hasCaption ? "absolute bottom-2 right-2 text-white bg-black/40 px-1.5 py-0.5 rounded-full backdrop-blur-sm z-10" : "justify-end mt-0.5 pr-1 text-stone-500"
+                )}>
+                  {format(new Date(msg.timestamp), 'HH:mm')} 
+                  {msg.isFromMe && <span className={isImage && !hasCaption ? "text-white" : "text-blue-500"}>✓✓</span>}
                 </div>
-              ) : (
-                <p className="text-sm">{msg.content}</p>
-              )}
-              
-              <div className={cn(
-                "text-[10.5px] font-medium flex items-center gap-1", 
-                isImage && !hasCaption ? "absolute bottom-2 right-2 text-white bg-black/40 px-1.5 py-0.5 rounded-full backdrop-blur-sm z-10" : "justify-end mt-0.5 pr-1 text-stone-500"
-              )}>
-                {format(new Date(msg.timestamp), 'HH:mm')} 
-                {msg.isFromMe && <span className={isImage && !hasCaption ? "text-white" : "text-blue-500"}>✓✓</span>}
+                </div>
               </div>
-              </div>
-            </div>
+            </React.Fragment>
           );
         })}
         <div ref={messagesEndRef} />
