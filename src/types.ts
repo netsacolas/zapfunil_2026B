@@ -30,6 +30,8 @@ export interface Message {
   type: 'TEXT' | 'AUDIO' | 'IMAGE';
   audioTranscription?: string;
   mediaUrl?: string;
+  senderId?: string;
+  senderName?: string;
 }
 
 export interface Conversation {

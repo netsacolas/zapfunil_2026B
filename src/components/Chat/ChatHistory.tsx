@@ -5,65 +5,7 @@ import { format } from 'date-fns';
 import { cn } from '../../lib/utils';
 import { io } from "socket.io-client";
 
-// WhatsApp-style avatar colors
-const AVATAR_COLORS = [
-  '#00A884', '#02BEB2', '#00C6E2', '#009DE2', '#007BFC',
-  '#5B6DEE', '#7C6BEE', '#B56AE0', '#D4619E', '#EF5350',
-  '#FF7043', '#FF9800', '#FFC107', '#AEEA00', '#66BB6A',
-];
-
-const getAvatarColor = (name: string): string => {
-  let hash = 0;
-  const str = name || 'U';
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-};
-
-const getInitials = (name: string): string => {
-  if (!name) return 'U';
-  return name.split(' ').filter(Boolean).map(n => n.charAt(0).toUpperCase()).join('').substring(0, 2);
-};
-
-const ChatHeaderAvatar = ({ chatId, name }: { chatId: string; name: string }) => {
-  const fetchProfilePicture = useAppStore(state => state.fetchProfilePicture);
-  const profilePicture = useAppStore(state => state.profilePictures[chatId]);
-  const wahaSessionStatus = useAppStore(state => state.wahaSessionStatus);
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    if (wahaSessionStatus === 'CONNECTED' && chatId) {
-      fetchProfilePicture(chatId);
-    }
-  }, [chatId, wahaSessionStatus, fetchProfilePicture]);
-
-  useEffect(() => {
-    setHasError(false);
-  }, [profilePicture]);
-
-  if (profilePicture && profilePicture !== 'FAILED' && !hasError) {
-    return (
-      <img 
-        src={profilePicture} 
-        alt={name} 
-        className="w-10 h-10 rounded-full mr-3 flex-shrink-0 object-cover border border-stone-100 shadow-sm"
-        onError={() => setHasError(true)}
-      />
-    );
-  }
-
-  const bgColor = getAvatarColor(name);
-
-  return (
-    <div 
-      className="w-10 h-10 rounded-full mr-3 flex-shrink-0 flex items-center justify-center font-bold text-white text-sm shadow-sm"
-      style={{ backgroundColor: bgColor }}
-    >
-      {getInitials(name)}
-    </div>
-  );
-};
+import { ChatAvatar } from './ChatAvatar';
 
 const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromMe: boolean }) => {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -387,7 +329,7 @@ export default function ChatHistory() {
       {/* Header */}
       <header className="h-16 bg-white border-b px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center">
-          <ChatHeaderAvatar chatId={conversation.id} name={conversation.contact.name} />
+          <ChatAvatar chatId={conversation.id} name={conversation.contact.name} size="md" autoFetch={true} />
           <div>
             <h2 className="text-sm font-bold text-stone-900">{conversation.contact.name}</h2>
             {isLoading ? (
@@ -435,6 +377,17 @@ export default function ChatHistory() {
                       Arquivar Conversa
                     </button>
                   )}
+
+                  <button
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      fetchProfilePicture(conversation.id, true);
+                    }}
+                    className="w-full text-left px-4 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50 hover:text-orange-600 transition flex items-center gap-2 cursor-pointer"
+                  >
+                    <Smile size={14} />
+                    Atualizar Avatar
+                  </button>
                   
                   <button
                     onClick={() => {
@@ -479,11 +432,29 @@ export default function ChatHistory() {
           const hasCaption = msg.content && msg.content !== imageUrl;
 
           return (
-            <div key={msg.id} className={cn(
-              "relative max-w-[85%] sm:max-w-md shadow-sm border text-stone-900", 
-              isImage ? "p-1" : "p-3",
-              msg.isFromMe ? "self-end bg-[#d9fdd3] border-[#d9fdd3] rounded-tl-xl rounded-b-xl" : "self-start bg-white border-white rounded-tr-xl rounded-b-xl"
-            )}>
+            <div 
+              key={msg.id} 
+              className={cn(
+                "flex items-end gap-2 max-w-[85%] sm:max-w-md", 
+                msg.isFromMe ? "self-end justify-end" : "self-start justify-start"
+              )}
+            >
+              {!msg.isFromMe && (
+                <ChatAvatar 
+                  chatId={msg.senderId || conversation.id} 
+                  name={msg.senderName || conversation.contact.name} 
+                  size="xs" 
+                  autoFetch={true}
+                />
+              )}
+              <div className={cn(
+                "relative shadow-sm border text-stone-900", 
+                isImage ? "p-1" : "p-3",
+                msg.isFromMe ? "bg-[#d9fdd3] border-[#d9fdd3] rounded-tl-xl rounded-b-xl" : "bg-white border-white rounded-tr-xl rounded-b-xl"
+              )}>
+                {!msg.isFromMe && msg.senderName && (
+                  <p className="text-[10px] font-bold text-orange-600 mb-1">{msg.senderName}</p>
+                )}
               {msg.type === 'AUDIO' ? (
                 <div className="flex flex-col w-[260px]">
                   <AudioMessagePlayer audioUrl={msg.mediaUrl} isFromMe={msg.isFromMe} />
@@ -520,6 +491,7 @@ export default function ChatHistory() {
               )}>
                 {format(new Date(msg.timestamp), 'HH:mm')} 
                 {msg.isFromMe && <span className={isImage && !hasCaption ? "text-white" : "text-blue-500"}>✓✓</span>}
+              </div>
               </div>
             </div>
           );

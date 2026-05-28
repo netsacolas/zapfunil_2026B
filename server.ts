@@ -101,6 +101,27 @@ async function startServer() {
     }
   });
 
+  // Proxy endpoint to load external avatar images without CORS/Referer issues
+  app.get("/api/avatar-proxy", async (req, res) => {
+    const url = req.query.url as string;
+    if (!url) {
+      return res.status(400).json({ error: "Missing url parameter" });
+    }
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        return res.status(response.status).send("Failed to fetch avatar image");
+      }
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      res.setHeader("Content-Type", contentType);
+      const arrayBuffer = await response.arrayBuffer();
+      return res.send(Buffer.from(arrayBuffer));
+    } catch (err: any) {
+      console.error("Avatar Proxy error:", err);
+      return res.status(500).json({ error: "Failed to proxy avatar", details: err.message });
+    }
+  });
+
   // Dummy API routes for the architecture 
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });

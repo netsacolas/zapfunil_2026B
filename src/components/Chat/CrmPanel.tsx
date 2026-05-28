@@ -1,9 +1,26 @@
 import React from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { Briefcase, MapPin, Tag, Edit3, X, AlignLeft, KanbanSquare } from 'lucide-react';
+import { ChatAvatar } from './ChatAvatar';
 
 export default function CrmPanel() {
-  const { conversations, activeConversationId, setActiveConversation, customFields, updateContactCustomField, addToKanban, removeFromKanban } = useAppStore();
+  const { conversations, activeConversationId, setActiveConversation, customFields, updateContactCustomField, addToKanban, removeFromKanban, setCustomAvatar } = useAppStore();
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result as string;
+      setCustomAvatar(contact.id, base64);
+    };
+    reader.readAsDataURL(file);
+  };
   const conversation = conversations.find(c => c.id === activeConversationId);
 
   if (!conversation) return null;
@@ -21,8 +38,18 @@ export default function CrmPanel() {
       </header>
 
       <div className="px-4 pb-4 flex flex-col items-center border-b border-stone-100">
-        <div className="w-16 h-16 rounded-full bg-stone-800 flex items-center justify-center text-xl font-bold text-white mb-3 shadow-sm">
-          {contact.name.split(' ').map(n => n.charAt(0)).join('').substring(0, 2)}
+        <div className="relative group cursor-pointer mb-3" onClick={handleAvatarClick} title="Clique para alterar foto">
+          <ChatAvatar chatId={contact.id} name={contact.name} size="xl" autoFetch={true} />
+          <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white text-[10px] font-bold">
+            Alterar
+          </div>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileChange} 
+            accept="image/*" 
+            className="hidden" 
+          />
         </div>
         <h3 className="text-sm font-bold text-stone-900">{contact.name}</h3>
         <p className="text-xs text-stone-500 mt-1">{contact.phone}</p>

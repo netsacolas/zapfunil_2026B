@@ -4,65 +4,7 @@ import { Search, Filter, X, Loader2, Archive, ArchiveRestore, ArrowLeft } from '
 import { format } from 'date-fns';
 import { cn } from '../../lib/utils';
 
-// WhatsApp-style avatar colors (same palette WhatsApp Web uses for default avatars)
-const AVATAR_COLORS = [
-  '#00A884', '#02BEB2', '#00C6E2', '#009DE2', '#007BFC',
-  '#5B6DEE', '#7C6BEE', '#B56AE0', '#D4619E', '#EF5350',
-  '#FF7043', '#FF9800', '#FFC107', '#AEEA00', '#66BB6A',
-];
-
-const getAvatarColor = (name: string): string => {
-  let hash = 0;
-  const str = name || 'U';
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-};
-
-const getInitials = (name: string): string => {
-  if (!name) return 'U';
-  return name.split(' ').filter(Boolean).map(n => n.charAt(0).toUpperCase()).join('').substring(0, 2);
-};
-
-const ChatAvatar = ({ chatId, name, isActive }: { chatId: string; name: string; isActive: boolean }) => {
-  const fetchProfilePicture = useAppStore(state => state.fetchProfilePicture);
-  const profilePicture = useAppStore(state => state.profilePictures[chatId]);
-  const wahaSessionStatus = useAppStore(state => state.wahaSessionStatus);
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    if (wahaSessionStatus === 'CONNECTED' && chatId) {
-      fetchProfilePicture(chatId);
-    }
-  }, [chatId, wahaSessionStatus, fetchProfilePicture]);
-
-  useEffect(() => {
-    setHasError(false);
-  }, [profilePicture]);
-
-  if (profilePicture && profilePicture !== 'FAILED' && !hasError) {
-    return (
-      <img 
-        src={profilePicture} 
-        alt={name} 
-        className="w-12 h-12 rounded-full mr-3 flex-shrink-0 object-cover border border-stone-100 shadow-sm"
-        onError={() => setHasError(true)}
-      />
-    );
-  }
-
-  const bgColor = getAvatarColor(name);
-
-  return (
-    <div 
-      className="w-12 h-12 rounded-full mr-3 flex-shrink-0 flex items-center justify-center font-bold text-sm text-white shadow-sm"
-      style={{ backgroundColor: bgColor }}
-    >
-      {getInitials(name)}
-    </div>
-  );
-};
+import { ChatAvatar } from './ChatAvatar';
 
 export default function ChatList() {
   const { 
@@ -356,9 +298,15 @@ export default function ChatList() {
                       clearTimeout(hoverTimeoutRef.current[conv.id]);
                       delete hoverTimeoutRef.current[conv.id];
                     }
+                    if (wahaSessionStatus === 'CONNECTED') {
+                      fetchProfilePicture(conv.id);
+                    }
                     setActiveConversation(conv.id);
                   }}
                   onMouseEnter={() => {
+                    if (wahaSessionStatus === 'CONNECTED') {
+                      fetchProfilePicture(conv.id);
+                    }
                     if (conv.messages.length <= 5) {
                       hoverTimeoutRef.current[conv.id] = setTimeout(() => {
                         loadMessages(conv.id);
@@ -376,7 +324,7 @@ export default function ChatList() {
                     isActive ? "bg-stone-100" : "hover:bg-stone-50"
                   )}
                 >
-                  <ChatAvatar chatId={conv.id} name={conv.contact.name} isActive={isActive} />
+                  <ChatAvatar chatId={conv.id} name={conv.contact.name} size="lg" autoFetch={true} />
                   <div className="flex-1 min-w-0 flex flex-col justify-center">
                     <div className="flex justify-between items-baseline mb-1">
                       <h3 className="font-semibold text-stone-900 truncate pr-2">{conv.contact.name}</h3>

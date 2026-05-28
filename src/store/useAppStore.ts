@@ -23,7 +23,9 @@ interface AppState {
   loadChats: () => Promise<void>;
   loadMessages: (chatId: string, isPriority?: boolean) => Promise<void>;
   profilePictures: Record<string, string>;
-  fetchProfilePicture: (chatId: string) => Promise<void>;
+  fetchProfilePicture: (chatId: string, force?: boolean) => Promise<void>;
+  customAvatars: Record<string, string>;
+  setCustomAvatar: (contactId: string, base64Data: string) => void;
   contactsMap: Record<string, string>;
   isContactsLoaded: boolean;
   isSyncingContacts: boolean;
@@ -37,7 +39,7 @@ interface AppState {
   loadMoreChats: () => Promise<void>;
   profilePicsQueue: string[];
   isProcessingQueue: boolean;
-  processProfilePicsQueue: () => Promise<void>;
+  processProfilePicsQueue: (force?: boolean) => Promise<void>;
   moveContact: (contactId: string, fromStageId: string, toStageId: string, sourceIndex: number, destIndex: number) => void;
   addToKanban: (contactId: string) => void;
   removeFromKanban: (contactId: string) => void;
@@ -212,6 +214,10 @@ const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionNa
   let content = msg.body || '';
   let mediaUrl: string | undefined = undefined;
   
+  // Extract sender details
+  const senderId = msg.participant || msg.from || '';
+  const senderName = msg._data?.pushName || msg.pushName || '';
+  
   // 1. Classification based on WAHA message type
   const wahaType = (msg.type || '').toLowerCase();
   if (wahaType === 'image') {
@@ -279,8 +285,28 @@ const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionNa
     timestamp: new Date(msg.timestamp * 1000).toISOString(),
     isFromMe: msg.fromMe,
     type: msgType,
-    mediaUrl: mediaUrl
+    mediaUrl: mediaUrl,
+    senderId: senderId,
+    senderName: senderName
   };
+};
+
+const initialProfilePictures = (() => {
+  try {
+    const cached = localStorage.getItem('zapfunil_profile_pictures');
+    return cached ? JSON.parse(cached) : {};
+  } catch (e) {
+    console.error("Failed to parse cached profile pictures:", e);
+    return {};
+  }
+})();
+
+const saveProfilePictures = (pictures: Record<string, string>) => {
+  try {
+    localStorage.setItem('zapfunil_profile_pictures', JSON.stringify(pictures));
+  } catch (e) {
+    console.error("Failed to save profile pictures to localStorage:", e);
+  }
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -394,6 +420,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       isProcessingQueue: false
     });
   },
+  setCustomAvatar: (contactId, base64Data) => {
+    const customAvatars = { ...get().customAvatars, [contactId]: base64Data };
+    const profilePictures = { ...get().profilePictures, [contactId]: base64Data };
+    set({ customAvatars, profilePictures });
+    try {
+      localStorage.setItem('zapfunil_custom_avatars', JSON.stringify(customAvatars));
+      localStorage.setItem('zapfunil_profile_pictures', JSON.stringify(profilePictures));
+    } catch (e) {
+      console.error("Failed to save custom avatar:", e);
+    }
+  },
 
   conversations: (() => {
     try {
@@ -407,7 +444,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeConversationId: null,
   funnelStages: mockStages,
   customFields: [],
-  profilePictures: {},
+  profilePictures: initialProfilePictures,
+  customAvatars: (() => {
+    try {
+      const cached = localStorage.getItem('zapfunil_custom_avatars');
+      return cached ? JSON.parse(cached) : {};
+    } catch (e) {
+      return {};
+    }
+  })(),
   contactsMap: (() => {
     try {
       const cached = localStorage.getItem('waha_contacts_map');
@@ -537,7 +582,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           // Extract profile picture if available in overview DTO to avoid loading queue
           if (c.picture && c.picture !== 'FAILED' && !profilePictures[chatId]) {
-            profilePictures[chatId] = c.picture;
+            profilePictures[chatId] = c.picture.startsWith('http')
+              ? `/api/avatar-proxy?url=${encodeURIComponent(c.picture)}`
+              : c.picture;
             profilePicsUpdated = true;
           }
 
@@ -615,6 +662,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       if (profilePicsUpdated) {
         set({ profilePictures });
+        saveProfilePictures(profilePictures);
       }
 
       set({ 
@@ -678,7 +726,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           // Extract profile picture if available in overview DTO
           if (c.picture && c.picture !== 'FAILED' && !profilePictures[chatId]) {
-            profilePictures[chatId] = c.picture;
+            profilePictures[chatId] = c.picture.startsWith('http')
+              ? `/api/avatar-proxy?url=${encodeURIComponent(c.picture)}`
+              : c.picture;
             profilePicsUpdated = true;
           }
 
@@ -741,6 +791,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       if (profilePicsUpdated) {
         set({ profilePictures });
+        saveProfilePictures(profilePictures);
       }
 
       // Merge new conversations with existing ones (avoiding duplicates)
@@ -904,17 +955,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
   },
-  fetchProfilePicture: async (chatId) => {
-    if (get().profilePictures[chatId]) return;
+  fetchProfilePicture: async (chatId, force = false) => {
+    if (!force && get().profilePictures[chatId] && get().profilePictures[chatId] !== 'FAILED') return;
     if (get().profilePicsQueue.includes(chatId)) return;
 
     set((state) => ({
       profilePicsQueue: [...state.profilePicsQueue, chatId]
     }));
 
-    get().processProfilePicsQueue();
+    get().processProfilePicsQueue(force);
   },
-  processProfilePicsQueue: async () => {
+  processProfilePicsQueue: async (force = false) => {
     if (get().isProcessingQueue) return;
     set({ isProcessingQueue: true });
 
@@ -925,7 +976,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         profilePicsQueue: state.profilePicsQueue.slice(1)
       }));
 
-      if (!get().profilePictures[chatId]) {
+      if (force || !get().profilePictures[chatId] || get().profilePictures[chatId] === 'FAILED') {
         const user = get().user;
         if (user) {
           const sessionName = getWahaSessionName(user);
@@ -944,7 +995,8 @@ export const useAppStore = create<AppState>((set, get) => ({
               }
             } else {
               const contactId = chatId.replace('@s.whatsapp.net', '@c.us');
-              const res = await fetch(`/api/waha-proxy/api/contacts/profile-picture?contactId=${contactId}&session=${sessionName}`, {
+              const refreshParam = force ? '&refresh=true' : '';
+              const res = await fetch(`/api/waha-proxy/api/contacts/profile-picture?contactId=${contactId}&session=${sessionName}${refreshParam}`, {
                 headers: getWahaHeaders(get)
               });
               if (res.ok) {
@@ -958,16 +1010,21 @@ export const useAppStore = create<AppState>((set, get) => ({
             console.error(`[Avatar] Failed to fetch avatar for ${chatId}:`, e);
           }
 
-          set((state) => ({
-            profilePictures: {
-              ...state.profilePictures,
-              [chatId]: avatarUrl || 'FAILED'
-            }
-          }));
+          let finalAvatarUrl = avatarUrl;
+          if (avatarUrl && avatarUrl.startsWith('http')) {
+            finalAvatarUrl = `/api/avatar-proxy?url=${encodeURIComponent(avatarUrl)}`;
+          }
+
+          const updatedPics = {
+            ...get().profilePictures,
+            [chatId]: finalAvatarUrl || 'FAILED'
+          };
+          set({ profilePictures: updatedPics });
+          saveProfilePictures(updatedPics);
         }
       }
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise(resolve => setTimeout(resolve, 800));
     }
 
     set({ isProcessingQueue: false });

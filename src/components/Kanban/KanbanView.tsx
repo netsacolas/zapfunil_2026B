@@ -1,6 +1,7 @@
 import React from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { useAppStore } from '../../store/useAppStore';
+import { ChatAvatar } from '../Chat/ChatAvatar';
 
 export default function KanbanView() {
   const { funnelStages, conversations, moveContact } = useAppStore();
@@ -64,9 +65,7 @@ export default function KanbanView() {
                                 }`}
                               >
                                 <div className="flex items-center gap-3 mb-3">
-                                   <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center font-medium text-orange-700 text-xs">
-                                     {contact.name.charAt(0)}
-                                   </div>
+                                   <ChatAvatar chatId={contact.id} name={contact.name} size="sm" autoFetch={true} />
                                    <div>
                                       <h4 className="font-medium text-stone-900 text-sm leading-tight">{contact.name}</h4>
                                       <p className="text-xs text-stone-500">{contact.company || 'Sem empresa'}</p>
