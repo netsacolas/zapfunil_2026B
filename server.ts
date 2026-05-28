@@ -4,6 +4,8 @@ import { createServer as createViteServer } from "vite";
 import { Server } from "socket.io";
 import http from "http";
 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 async function startServer() {
   const app = express();
   const PORT = 3000;

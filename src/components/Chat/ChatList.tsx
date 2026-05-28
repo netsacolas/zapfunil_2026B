@@ -385,7 +385,13 @@ export default function ChatList() {
                         {lastMsg?.type === 'AUDIO' ? (
                           <><span>🎵</span> Áudio</>
                         ) : lastMsg?.type === 'IMAGE' ? (
-                          <><span>📷</span> {lastMsg?.content && lastMsg?.content !== '📷 Imagem' ? lastMsg.content : 'Imagem'}</>
+                          <><span>📷</span> {lastMsg?.content || 'Imagem'}</>
+                        ) : lastMsg?.type === 'VIDEO' ? (
+                          <><span>🎥</span> {lastMsg?.content || 'Vídeo'}</>
+                        ) : lastMsg?.type === 'DOCUMENT' ? (
+                          <><span>📁</span> {lastMsg?.content || 'Documento'}</>
+                        ) : lastMsg?.type === 'STICKER' ? (
+                          <><span>🖼️</span> Figurinha</>
                         ) : (
                           lastMsg?.content
                         )}

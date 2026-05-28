@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { MoreVertical, Paperclip, Smile, Mic, Send, Bot, CalendarClock, X, Loader2, Play, Pause, Archive, ArchiveRestore, Trash2, Check } from 'lucide-react';
+import { MoreVertical, Paperclip, Smile, Mic, Send, Bot, CalendarClock, X, Loader2, Play, Pause, Archive, ArchiveRestore, Trash2, Check, FileText, FileSpreadsheet, Download, Video } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 import { cn } from '../../lib/utils';
 import { io } from "socket.io-client";
@@ -11,6 +11,7 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [speed, setSpeed] = useState(1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Fallback para áudio de teste público caso a URL venha vazia (como nos dados mockados)
@@ -22,6 +23,8 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
       audioRef.current.load();
       setIsPlaying(false);
       setCurrentTime(0);
+      setSpeed(1);
+      audioRef.current.playbackRate = 1;
     }
   }, [finalUrl]);
 
@@ -32,6 +35,17 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
     } else {
       audioRef.current.play().catch(e => console.error("Error playing audio:", e));
     }
+  };
+
+  const toggleSpeed = () => {
+    if (!audioRef.current) return;
+    let nextSpeed = 1;
+    if (speed === 1) nextSpeed = 1.5;
+    else if (speed === 1.5) nextSpeed = 2;
+    else nextSpeed = 1;
+    
+    setSpeed(nextSpeed);
+    audioRef.current.playbackRate = nextSpeed;
   };
 
   const handleTimeUpdate = () => {
@@ -61,7 +75,7 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
   const progress = duration ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="flex items-center space-x-3 p-2 rounded-lg border bg-white border-stone-100 shadow-sm w-[260px] text-stone-900">
+    <div className="flex items-center space-x-3 p-2 rounded-lg border bg-stone-50 border-stone-100 shadow-sm w-[280px] text-stone-900">
       <audio 
         ref={audioRef}
         src={finalUrl}
@@ -103,8 +117,56 @@ const AudioMessagePlayer = ({ audioUrl, isFromMe }: { audioUrl?: string; isFromM
           <span>{duration ? formatTime(duration) : '--:--'}</span>
         </div>
       </div>
+      <button 
+        type="button"
+        onClick={toggleSpeed}
+        className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-stone-200 hover:bg-stone-300 border border-stone-300 text-stone-700 transition-colors flex-shrink-0 cursor-pointer"
+        title="Velocidade de Reprodução"
+      >
+        {speed}x
+      </button>
     </div>
   );
+};
+
+const formatFileSize = (bytes?: number) => {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
+};
+
+const getFileMetadata = (filename?: string) => {
+  const defaultMeta = {
+    color: 'bg-stone-500',
+    iconColor: 'text-stone-500',
+    ext: 'ARQUIVO',
+    icon: FileText
+  };
+  if (!filename) return defaultMeta;
+  const parts = filename.split('.');
+  const ext = parts[parts.length - 1].toLowerCase();
+  
+  switch (ext) {
+    case 'pdf':
+      return { color: 'bg-red-500', iconColor: 'text-red-500', ext: 'PDF', icon: FileText };
+    case 'xls':
+    case 'xlsx':
+      return { color: 'bg-emerald-600', iconColor: 'text-emerald-600', ext: 'EXCEL', icon: FileSpreadsheet };
+    case 'doc':
+    case 'docx':
+      return { color: 'bg-blue-600', iconColor: 'text-blue-600', ext: 'WORD', icon: FileText };
+    case 'ppt':
+    case 'pptx':
+      return { color: 'bg-orange-600', iconColor: 'text-orange-600', ext: 'PPT', icon: FileText };
+    case 'zip':
+    case 'rar':
+      return { color: 'bg-amber-600', iconColor: 'text-amber-600', ext: 'COMPRIMIDO', icon: FileText };
+    default:
+      return { ...defaultMeta, ext: ext.toUpperCase() };
+  }
 };
 
 export default function ChatHistory() {
@@ -390,6 +452,23 @@ export default function ChatHistory() {
                   </button>
                   
                   <button
+                    onClick={async () => {
+                      setIsMenuOpen(false);
+                      // Clear local messages cache and force priority refetch from WAHA
+                      useAppStore.setState((state) => ({
+                        conversations: state.conversations.map(c => 
+                          c.id === conversation.id ? { ...c, messages: [], hasLoadedHistory: false } : c
+                        )
+                      }));
+                      await loadMessages(conversation.id, true);
+                    }}
+                    className="w-full text-left px-4 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50 hover:text-orange-600 transition flex items-center gap-2 cursor-pointer"
+                  >
+                    <Smile size={14} className="rotate-90 text-orange-500" />
+                    Sincronizar Conversa
+                  </button>
+                  
+                  <button
                     onClick={() => {
                       if (confirm("Tem certeza de que deseja limpar todas as mensagens desta conversa? Isso não pode ser desfeito.")) {
                         setIsMenuOpen(false);
@@ -465,15 +544,19 @@ export default function ChatHistory() {
                   />
                 )}
                 <div className={cn(
-                  "relative shadow-sm border text-stone-900", 
-                  isImage ? "p-1" : "p-3",
-                  msg.isFromMe ? "bg-[#d9fdd3] border-[#d9fdd3] rounded-tl-xl rounded-b-xl" : "bg-white border-white rounded-tr-xl rounded-b-xl"
+                  "relative text-stone-900", 
+                  msg.type === 'STICKER'
+                    ? "bg-transparent border-transparent shadow-none"
+                    : cn(
+                        isImage || msg.type === 'VIDEO' ? "p-1 shadow-sm border" : "p-3 shadow-sm border",
+                        msg.isFromMe ? "bg-[#d9fdd3] border-[#d9fdd3] rounded-tl-xl rounded-b-xl" : "bg-white border-white rounded-tr-xl rounded-b-xl"
+                      )
                 )}>
                   {!msg.isFromMe && msg.senderName && (
                     <p className="text-[10px] font-bold text-orange-600 mb-1">{msg.senderName}</p>
                   )}
                 {msg.type === 'AUDIO' ? (
-                  <div className="flex flex-col w-[260px]">
+                  <div className="flex flex-col w-[280px]">
                     <AudioMessagePlayer audioUrl={msg.mediaUrl} isFromMe={msg.isFromMe} />
                     {msg.audioTranscription && (
                       <div className="mt-2 p-2 rounded border bg-white border-stone-200 shadow-sm">
@@ -487,16 +570,78 @@ export default function ChatHistory() {
                   </div>
                 ) : isImage ? (
                   <div className="flex flex-col relative group">
-                    <img 
-                      src={imageUrl} 
-                      alt="Imagem da conversa" 
-                      className="max-w-full sm:max-w-[320px] rounded-lg cursor-pointer object-cover shadow-sm"
-                      style={{ maxHeight: '320px' }}
-                      onClick={() => setSelectedImage(imageUrl)}
-                    />
+                    <div className="w-[240px] sm:w-[280px] h-[180px] sm:h-[210px] bg-stone-200/50 rounded-lg overflow-hidden flex items-center justify-center relative shadow-sm">
+                      <img 
+                        src={imageUrl} 
+                        alt="Imagem da conversa" 
+                        className="w-full h-full object-cover cursor-pointer"
+                        onClick={() => setSelectedImage(imageUrl)}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          const parent = e.currentTarget.parentElement;
+                          if (parent) {
+                            const errorPlaceholder = parent.querySelector('.img-error-placeholder') as HTMLElement;
+                            if (errorPlaceholder) errorPlaceholder.style.display = 'flex';
+                          }
+                        }}
+                      />
+                      <div className="img-error-placeholder hidden absolute inset-0 flex-col items-center justify-center text-stone-400 gap-1 bg-stone-100">
+                        <span className="text-xl">📷</span>
+                        <span className="text-[10px] font-medium text-stone-500">Falha ao carregar imagem</span>
+                      </div>
+                    </div>
                     {hasCaption && (
                       <p className="text-sm mt-1 px-1 pb-3">{msg.content}</p>
                     )}
+                  </div>
+                ) : msg.type === 'VIDEO' ? (
+                  <div className="flex flex-col relative w-[240px] sm:w-[280px] h-[180px] sm:h-[210px] rounded-lg overflow-hidden border border-stone-200/50 bg-black">
+                    <video 
+                      src={msg.mediaUrl} 
+                      controls 
+                      preload="metadata"
+                      className="w-full h-full object-cover"
+                    />
+                    {msg.content && msg.content !== '🎥 Vídeo' && msg.content !== msg.mediaUrl && (
+                      <p className="text-xs p-2 bg-white text-stone-800">{msg.content}</p>
+                    )}
+                  </div>
+                ) : msg.type === 'DOCUMENT' ? (
+                  (() => {
+                    const meta = getFileMetadata(msg.filename);
+                    const FileIcon = meta.icon;
+                    return (
+                      <a 
+                        href={msg.mediaUrl} 
+                        download={msg.filename || 'arquivo'} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 p-3 bg-stone-50 hover:bg-stone-100 rounded-lg transition-colors cursor-pointer text-stone-900 border border-stone-200/50 w-[260px] sm:w-[300px]"
+                      >
+                        <div className={cn("w-12 h-12 rounded-lg flex items-center justify-center text-white flex-shrink-0 shadow-sm", meta.color)}>
+                          <FileIcon size={24} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate text-stone-800" title={msg.filename || msg.content}>
+                            {msg.filename || msg.content}
+                          </p>
+                          <p className="text-[10px] text-stone-500 font-medium uppercase mt-0.5">
+                            {formatFileSize(msg.filesize)} • {meta.ext}
+                          </p>
+                        </div>
+                        <div className="w-8 h-8 rounded-full bg-white hover:bg-stone-200 flex items-center justify-center text-stone-600 shadow-sm flex-shrink-0 transition border border-stone-150">
+                          <Download size={14} />
+                        </div>
+                      </a>
+                    );
+                  })()
+                ) : msg.type === 'STICKER' ? (
+                  <div className="flex flex-col relative">
+                    <img 
+                      src={msg.mediaUrl || msg.content} 
+                      alt="Sticker" 
+                      className="w-32 h-32 object-contain"
+                    />
                   </div>
                 ) : (
                   <p className="text-sm">{msg.content}</p>
@@ -504,10 +649,11 @@ export default function ChatHistory() {
                 
                 <div className={cn(
                   "text-[10.5px] font-medium flex items-center gap-1", 
-                  isImage && !hasCaption ? "absolute bottom-2 right-2 text-white bg-black/40 px-1.5 py-0.5 rounded-full backdrop-blur-sm z-10" : "justify-end mt-0.5 pr-1 text-stone-500"
+                  (isImage || msg.type === 'VIDEO') && !hasCaption ? "absolute bottom-2 right-2 text-white bg-black/40 px-1.5 py-0.5 rounded-full backdrop-blur-sm z-10" : "justify-end mt-0.5 pr-1 text-stone-500",
+                  msg.type === 'STICKER' && "absolute bottom-0 -right-12 text-stone-400 bg-transparent px-1 py-0.5 rounded-full z-10"
                 )}>
                   {format(new Date(msg.timestamp), 'HH:mm')} 
-                  {msg.isFromMe && <span className={isImage && !hasCaption ? "text-white" : "text-blue-500"}>✓✓</span>}
+                  {msg.isFromMe && <span className={(isImage || msg.type === 'VIDEO') && !hasCaption ? "text-white" : "text-blue-500"}>✓✓</span>}
                 </div>
                 </div>
               </div>

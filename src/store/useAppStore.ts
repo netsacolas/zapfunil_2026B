@@ -246,35 +246,82 @@ const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionNa
     senderName = formatPhoneNumber(senderName);
   }
   
-  // 1. Classification based on WAHA message type
-  const wahaType = (msg.type || '').toLowerCase();
+  // 1. Classification based on WAHA message type or raw WhatsApp data
+  let wahaType = (msg.type || '').toLowerCase();
+  
+  if (!wahaType && msg._data?.message) {
+    const rawMsg = msg._data.message;
+    if (rawMsg.imageMessage) wahaType = 'image';
+    else if (rawMsg.audioMessage) wahaType = 'audio';
+    else if (rawMsg.videoMessage) wahaType = 'video';
+    else if (rawMsg.documentMessage) wahaType = 'document';
+    else if (rawMsg.stickerMessage) wahaType = 'sticker';
+  }
+
   if (wahaType === 'image') {
     msgType = 'IMAGE';
-    content = msg.body || '📷 Imagem';
+    content = msg.body || '';
   } else if (wahaType === 'audio' || wahaType === 'voice' || wahaType === 'ptt') {
     msgType = 'AUDIO';
-    content = msg.body || '🎵 Áudio';
+    content = msg.body || '';
+  } else if (wahaType === 'video') {
+    msgType = 'VIDEO';
+    content = msg.body || '';
+  } else if (wahaType === 'document') {
+    msgType = 'DOCUMENT';
+    content = msg.media?.filename || msg.filename || msg.body || '';
+  } else if (wahaType === 'sticker') {
+    msgType = 'STICKER';
+    content = '';
   }
   
   // 2. Determine if message should have media
-  const hasMediaFile = msg.hasMedia || wahaType === 'image' || wahaType === 'audio' || wahaType === 'voice' || wahaType === 'ptt';
+  const hasMediaFile = msg.hasMedia || 
+    wahaType === 'image' || 
+    wahaType === 'audio' || 
+    wahaType === 'voice' || 
+    wahaType === 'ptt' || 
+    wahaType === 'video' || 
+    wahaType === 'document' || 
+    wahaType === 'sticker';
   
+  let mime = msg.media?.mimetype || '';
   if (hasMediaFile) {
-    let mime = msg.media?.mimetype || '';
     if (!mime) {
       if (wahaType === 'image') mime = 'image/jpeg';
       else if (wahaType === 'audio' || wahaType === 'voice' || wahaType === 'ptt') mime = 'audio/ogg';
+      else if (wahaType === 'video') mime = 'video/mp4';
+      else if (wahaType === 'document') mime = 'application/octet-stream';
+      else if (wahaType === 'sticker') mime = 'image/webp';
     }
 
-    if (msgType === 'TEXT') {
-      if (mime.startsWith('audio')) {
+    // Deduce mime type from file extension if generic application/octet-stream
+    if (mime === 'application/octet-stream') {
+      const filename = msg.media?.filename || msg.filename || '';
+      const ext = filename.split('.').pop()?.toLowerCase() || '';
+      if (['mp3', 'ogg', 'wav', 'm4a', 'aac', 'opus'].includes(ext)) {
+        mime = 'audio/' + (ext === 'mp3' ? 'mpeg' : ext);
+      } else if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+        mime = 'image/' + (ext === 'jpg' ? 'jpeg' : ext);
+      } else if (['mp4', 'avi', 'mov', 'webm', '3gp'].includes(ext)) {
+        mime = 'video/' + ext;
+      }
+    }
+
+    // Reclassify TEXT or DOCUMENT message to actual media types if mime matches
+    if (msgType === 'TEXT' || msgType === 'DOCUMENT') {
+      if (mime.startsWith('audio/')) {
         msgType = 'AUDIO';
-        content = msg.body || '🎵 Áudio';
-      } else if (mime.startsWith('image')) {
+        content = msg.body || '';
+      } else if (mime.startsWith('image/')) {
         msgType = 'IMAGE';
-        content = msg.body || '📷 Imagem';
-      } else {
-        content = msg.body || '📁 Arquivo';
+        content = msg.body || '';
+      } else if (mime.startsWith('video/')) {
+        msgType = 'VIDEO';
+        content = msg.body || '';
+      } else if (wahaType === 'document') {
+        msgType = 'DOCUMENT';
+        content = msg.media?.filename || msg.filename || msg.body || '';
       }
     }
     
@@ -314,6 +361,9 @@ const wahaMsgToMessage = (msg: any, wahaUrl?: string, apiKey?: string, sessionNa
     isFromMe: msg.fromMe,
     type: msgType,
     mediaUrl: mediaUrl,
+    mimeType: msg.media?.mimetype || mime || undefined,
+    filename: msg.media?.filename || msg.filename || undefined,
+    filesize: msg.media?.filesize || undefined,
     senderId: senderId,
     senderName: senderName
   };
@@ -1050,7 +1100,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingChatId: chatId });
 
     try {
-      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30&downloadMedia=false`, {
+      const res = await fetch(`/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30&downloadMedia=true`, {
         headers: getWahaHeaders(get),
         signal: controller.signal
       });
@@ -1838,6 +1888,15 @@ export const useAppStore = create<AppState>((set, get) => ({
           const msg = wahaMsgToMessage(msgPayload, get().wahaUrl, get().wahaApiKey, sessionName);
           const chatId = msgPayload.fromMe ? msgPayload.to : msgPayload.from;
           if (!chatId) return;
+
+          // Se for uma mensagem de mídia recebida, agenda um recarregamento para obter a URL correta do proxy
+          if (msgPayload.hasMedia || msg.type !== 'TEXT') {
+            setTimeout(() => {
+              if (get().activeConversationId === chatId) {
+                get().loadMessages(chatId);
+              }
+            }, 2000);
+          }
 
           set((state) => {
             const existingConvIndex = state.conversations.findIndex(c => c.id === chatId);

@@ -27,9 +27,12 @@ export interface Message {
   content: string;
   timestamp: string;
   isFromMe: boolean;
-  type: 'TEXT' | 'AUDIO' | 'IMAGE';
+  type: 'TEXT' | 'AUDIO' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'STICKER';
   audioTranscription?: string;
   mediaUrl?: string;
+  mimeType?: string;
+  filename?: string;
+  filesize?: number;
   senderId?: string;
   senderName?: string;
 }
