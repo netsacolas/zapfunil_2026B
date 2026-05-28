@@ -170,7 +170,7 @@ const getFileMetadata = (filename?: string) => {
 };
 
 export default function ChatHistory() {
-  const { conversations, activeConversationId, sendMessage, addScheduledMessage, wahaSessionStatus, loadMessages, profilePictures, fetchProfilePicture, loadingChatId, archiveConversation, unarchiveConversation, clearConversationMessages, deleteConversation, sendImageMessage, sendVoiceMessage, sendFileMessage } = useAppStore();
+  const { conversations, activeConversationId, sendMessage, addScheduledMessage, wahaSessionStatus, loadMessages, loadOlderMessages, isLoadingOlderMessages, hasMoreOlderMessages, profilePictures, fetchProfilePicture, loadingChatId, archiveConversation, unarchiveConversation, clearConversationMessages, deleteConversation, sendImageMessage, sendVoiceMessage, sendFileMessage } = useAppStore();
   const [inputText, setInputText] = useState('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
@@ -181,6 +181,10 @@ export default function ChatHistory() {
   const [scheduleRecurrence, setScheduleRecurrence] = useState<'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'>('NONE');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const prevMessageCountRef = useRef(0);
+  const isAtBottomRef = useRef(true);
+  const wasLoadingOlderRef = useRef(false);
 
   // File upload state & ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -201,22 +205,98 @@ export default function ChatHistory() {
   const conversation = conversations.find(c => c.id === activeConversationId);
   const messages = conversation?.messages || [];
   const isLoading = loadingChatId === activeConversationId;
+  const canLoadOlder = hasMoreOlderMessages[activeConversationId || ''] !== false;
 
   // For real-time sync with backend
   useEffect(() => {
     if (wahaSessionStatus === 'CONNECTED' && activeConversationId) {
       loadMessages(activeConversationId);
       fetchProfilePicture(activeConversationId);
+      // Reset pagination state when switching chats
+      isAtBottomRef.current = true;
+      prevMessageCountRef.current = 0;
     }
   }, [wahaSessionStatus, activeConversationId, loadMessages, fetchProfilePicture]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
+  // Scroll to bottom only when new messages arrive AND user was already at bottom
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const prevCount = prevMessageCountRef.current;
+    const currentCount = messages.length;
+
+    if (currentCount > prevCount) {
+      const wasScrolledUp = !isAtBottomRef.current;
+
+      if (wasScrolledUp && prevCount > 0) {
+        // Preserve scroll position when older messages were prepended
+        const oldScrollHeight = container.scrollHeight;
+        requestAnimationFrame(() => {
+          const newScrollHeight = container.scrollHeight;
+          container.scrollTop += newScrollHeight - oldScrollHeight;
+          // Após restaurar a posição, verificar se ainda estamos no topo
+          // Se sim, continuar carregando mais mensagens automaticamente
+          if (container.scrollTop < 120 && activeConversationId && !isLoadingOlderMessages) {
+            loadOlderMessages(activeConversationId);
+          }
+        });
+      } else if (!wasScrolledUp || prevCount === 0) {
+        scrollToBottom('instant');
+      }
+    }
+
+    prevMessageCountRef.current = currentCount;
+  }, [messages, activeConversationId, isLoadingOlderMessages, loadOlderMessages]);
+
+  // Continuar carregando automaticamente quando o carregamento terminar e ainda estivermos no topo
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    // Detecta a transição: estava carregando → terminou de carregar
+    if (wasLoadingOlderRef.current && !isLoadingOlderMessages) {
+      if (container && container.scrollTop < 120 && activeConversationId && canLoadOlder) {
+        // Pequeno delay para deixar o DOM se atualizar com as novas mensagens
+        const timer = setTimeout(() => {
+          if (messagesContainerRef.current && messagesContainerRef.current.scrollTop < 120 && canLoadOlder) {
+            loadOlderMessages(activeConversationId);
+          }
+        }, 150);
+        return () => clearTimeout(timer);
+      }
+    }
+    wasLoadingOlderRef.current = isLoadingOlderMessages;
+  }, [isLoadingOlderMessages, activeConversationId, canLoadOlder, loadOlderMessages]);
+
+  // Scroll to bottom immediately on first load
+  useEffect(() => {
+    if (messages.length > 0 && prevMessageCountRef.current === 0) {
+      scrollToBottom('instant');
+    }
+  }, [activeConversationId]);
+
+  // Detect scroll position to load older messages
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+      isAtBottomRef.current = distanceFromBottom < 80;
+
+      // Trigger loading older messages when near top
+      if (scrollTop < 80 && !isLoadingOlderMessages && activeConversationId && canLoadOlder) {
+        loadOlderMessages(activeConversationId);
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [activeConversationId, isLoadingOlderMessages, canLoadOlder, loadOlderMessages]);
 
   // Cleanup recording timer on unmount
   useEffect(() => {
@@ -503,7 +583,22 @@ export default function ChatHistory() {
       </header>
 
       {/* Messages */}
-      <div className="flex-1 p-6 space-y-4 flex flex-col overflow-y-auto">
+      <div
+        ref={messagesContainerRef}
+        className="flex-1 p-6 space-y-4 flex flex-col overflow-y-auto"
+      >
+        {/* Indicador de carregamento de mensagens antigas */}
+        {isLoadingOlderMessages && (
+          <div className="self-center py-2 px-4 bg-white/80 backdrop-blur-sm rounded-full text-[11px] text-stone-500 shadow-sm flex items-center gap-2 my-1">
+            <Loader2 className="animate-spin" size={12} />
+            Carregando mensagens anteriores...
+          </div>
+        )}
+        {!isLoadingOlderMessages && !canLoadOlder && messages.length > 0 && (
+          <div className="self-center py-1 px-3 bg-white/60 rounded-full text-[10px] text-stone-400 my-1">
+            Início da conversa
+          </div>
+        )}
         {messages.map((msg, idx) => {
           const msgDate = new Date(msg.timestamp);
           const prevMsg = idx > 0 ? messages[idx - 1] : null;

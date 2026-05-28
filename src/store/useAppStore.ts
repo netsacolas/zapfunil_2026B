@@ -22,6 +22,10 @@ interface AppState {
   sendMessage: (conversationId: string, content: string) => void;
   loadChats: () => Promise<void>;
   loadMessages: (chatId: string, isPriority?: boolean) => Promise<void>;
+  loadOlderMessages: (chatId: string) => Promise<void>;
+  isLoadingOlderMessages: boolean;
+  hasMoreOlderMessages: Record<string, boolean>;
+  conversationOffsets: Record<string, number>;
   profilePictures: Record<string, string>;
   fetchProfilePicture: (chatId: string, force?: boolean) => Promise<void>;
   customAvatars: Record<string, string>;
@@ -1072,6 +1076,77 @@ export const useAppStore = create<AppState>((set, get) => ({
       return false;
     }
   },
+  isLoadingOlderMessages: false,
+  hasMoreOlderMessages: {},
+  conversationOffsets: {},
+
+  loadOlderMessages: async (chatId) => {
+    if (get().isLoadingOlderMessages) return;
+    const { hasMoreOlderMessages, conversationOffsets } = get();
+    if (hasMoreOlderMessages[chatId] === false) return;
+
+    const user = get().user;
+    if (!user) return;
+    const sessionName = getWahaSessionName(user);
+
+    const conv = get().conversations.find(c => c.id === chatId);
+    if (!conv || conv.messages.length === 0) return;
+
+    // Usar offset baseado em quantas mensagens já foram carregadas para este chat
+    const currentOffset = conversationOffsets[chatId] || conv.messages.length;
+
+    set({ isLoadingOlderMessages: true });
+
+    try {
+      const res = await fetch(
+        `/api/waha-proxy/api/${sessionName}/chats/${chatId}/messages?limit=30&downloadMedia=true&offset=${currentOffset}`,
+        { headers: getWahaHeaders(get) }
+      );
+      if (!res.ok) throw new Error('Failed to fetch older messages');
+
+      const wahaMsgs = await res.json();
+
+      if (!wahaMsgs || wahaMsgs.length === 0) {
+        set((state) => ({
+          hasMoreOlderMessages: { ...state.hasMoreOlderMessages, [chatId]: false }
+        }));
+        return;
+      }
+
+      const olderMessages = wahaMsgs
+        .map((msg: any) => wahaMsgToMessage(msg, get().wahaUrl, get().wahaApiKey, sessionName))
+        .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+      set((state) => {
+        const existingConv = state.conversations.find(c => c.id === chatId);
+        if (!existingConv) return {};
+
+        // Mesclar mensagens antigas (no início) com as existentes, sem duplicatas
+        const existingIds = new Set(existingConv.messages.map(m => m.id));
+        const newMsgs = olderMessages.filter((m: any) => !existingIds.has(m.id));
+        const merged = [...newMsgs, ...existingConv.messages];
+
+        return {
+          conversations: state.conversations.map(c =>
+            c.id === chatId ? { ...c, messages: merged } : c
+          ),
+          conversationOffsets: {
+            ...state.conversationOffsets,
+            [chatId]: currentOffset + wahaMsgs.length
+          },
+          hasMoreOlderMessages: {
+            ...state.hasMoreOlderMessages,
+            [chatId]: wahaMsgs.length >= 30
+          }
+        };
+      });
+    } catch (err) {
+      console.error(`Failed to load older messages for ${chatId}:`, err);
+    } finally {
+      set({ isLoadingOlderMessages: false });
+    }
+  },
+
   loadMessages: async (chatId, isPriority = false) => {
     const user = get().user;
     if (!user) return;
@@ -1112,10 +1187,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
       // Update messages in the specific conversation in state
+      // Reset offset and hasMore flags for fresh load
       set((state) => ({
-        conversations: state.conversations.map(c => 
+        conversations: state.conversations.map(c =>
           c.id === chatId ? { ...c, messages, hasLoadedHistory: true } : c
-        )
+        ),
+        conversationOffsets: { ...state.conversationOffsets, [chatId]: messages.length },
+        hasMoreOlderMessages: { ...state.hasMoreOlderMessages, [chatId]: messages.length >= 30 }
       }));
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -1964,11 +2042,11 @@ useAppStore.subscribe((state) => {
   if (state.conversations !== lastConversations) {
     lastConversations = state.conversations;
     try {
-      // Limitar o cache para salvar apenas as últimas 15 mensagens de cada conversa.
-      // Isso evita estouro de cota (QuotaExceededError) no localStorage (limite de 5MB).
+      // Salvar apenas as últimas 50 mensagens de cada conversa no cache
+      // (evita estouro de cota do localStorage que tem limite de 5MB)
       const cacheFriendly = state.conversations.map(c => ({
         ...c,
-        messages: c.messages.slice(-15)
+        messages: c.messages.slice(-50)
       }));
       localStorage.setItem('zapfunil_conversations_cache', JSON.stringify(cacheFriendly));
     } catch (e) {
